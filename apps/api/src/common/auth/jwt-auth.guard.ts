@@ -4,6 +4,8 @@ import { JwtService } from '@nestjs/jwt';
 import { IS_PUBLIC_KEY } from './auth.decorators';
 import type { AuthenticatedUser } from '../../modules/auth/auth.types';
 
+interface AccessTokenPayload { sub: string; sessionId?: string; roles?: AuthenticatedUser['roles']; email?: string | null; phone?: string | null; }
+
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
   constructor(private readonly reflector: Reflector, private readonly jwt: JwtService) {}
@@ -14,7 +16,8 @@ export class JwtAuthGuard implements CanActivate {
     const token = request.headers.authorization?.startsWith('Bearer ') ? request.headers.authorization.slice(7) : undefined;
     if (!token) throw new UnauthorizedException('Authentication required');
     try {
-      request.user = await this.jwt.verifyAsync<AuthenticatedUser>(token, { secret: process.env.JWT_ACCESS_SECRET });
+      const payload = await this.jwt.verifyAsync<AccessTokenPayload>(token, { secret: process.env.JWT_ACCESS_SECRET });
+      request.user = { id: payload.sub, email: payload.email ?? null, phone: payload.phone ?? null, roles: payload.roles ?? [], sessionId: payload.sessionId };
       return true;
     } catch {
       throw new UnauthorizedException('Invalid or expired access token');

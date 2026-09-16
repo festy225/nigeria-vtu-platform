@@ -1,0 +1,3 @@
+import { ProtectedRoute } from '@/components/protected-route';
+import { Card } from '@/components/ui/primitives';
+export default function AdminPage() { return <ProtectedRoute roles={['ADMIN', 'SUPER_ADMIN']}><div className="space-y-8"><div><p className="eyebrow">Administration</p><h1 className="mt-2 text-3xl font-bold text-white">Admin workspace</h1><p className="mt-2 text-sm text-slate-400">Backend authorization controls access to this area.</p></div><Card><h2 className="font-semibold text-white">Permission boundary active</h2><p className="mt-2 text-sm text-slate-400">This placeholder confirms the frontend role gate. Every sensitive operation must also be protected by backend guards.</p></Card></div></ProtectedRoute>; }

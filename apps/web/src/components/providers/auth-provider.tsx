@@ -1,57 +1,15 @@
 'use client';
 
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import type { AuthUser } from '@/lib/api';
-import { api } from '@/lib/api';
+import { api, clearAuthStorage, readAuthStorage, writeAuthStorage, type AuthUser } from '@/lib/api';
 
-type AuthContextValue = {
-  user: AuthUser | null;
-  isLoading: boolean;
-  isAuthenticated: boolean;
-  setSession: (accessToken: string, refreshToken: string, user: AuthUser) => void;
-  logout: () => Promise<void>;
-};
-
+type AuthContextValue = { user: AuthUser | null; isLoading: boolean; isAuthenticated: boolean; error: string | null; setSession: (session: { accessToken: string; refreshToken: string; user: AuthUser }) => void; logout: () => Promise<void>; refreshUser: () => Promise<void>; hasRole: (...roles: string[]) => boolean; };
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    const raw = window.localStorage.getItem('vtu_user');
-    if (raw) {
-      try { setUser(JSON.parse(raw) as AuthUser); } catch { window.localStorage.removeItem('vtu_user'); }
-    }
-    setIsLoading(false);
-  }, []);
-
-  const value = useMemo<AuthContextValue>(() => ({
-    user,
-    isLoading,
-    isAuthenticated: Boolean(user && window.localStorage.getItem('vtu_access_token')),
-    setSession: (accessToken, refreshToken, nextUser) => {
-      window.localStorage.setItem('vtu_access_token', accessToken);
-      window.localStorage.setItem('vtu_refresh_token', refreshToken);
-      window.localStorage.setItem('vtu_user', JSON.stringify(nextUser));
-      setUser(nextUser);
-    },
-    logout: async () => {
-      const refreshToken = window.localStorage.getItem('vtu_refresh_token') ?? undefined;
-      try { await api.logout(refreshToken); } finally {
-        window.localStorage.removeItem('vtu_access_token');
-        window.localStorage.removeItem('vtu_refresh_token');
-        window.localStorage.removeItem('vtu_user');
-        setUser(null);
-      }
-    }
-  }), [isLoading, user]);
-
+  const [user, setUser] = useState<AuthUser | null>(null); const [isLoading, setIsLoading] = useState(true); const [error, setError] = useState<string | null>(null);
+  useEffect(() => { let mounted = true; const bootstrap = async () => { const stored = readAuthStorage(); if (!stored) { if (mounted) setIsLoading(false); return; } try { const current = await api.me(); if (mounted) setUser(current); } catch { clearAuthStorage(); if (mounted) setError('Your session has expired. Please sign in again.'); } finally { if (mounted) setIsLoading(false); } }; void bootstrap(); return () => { mounted = false; }; }, []);
+  const value = useMemo<AuthContextValue>(() => ({ user, isLoading, isAuthenticated: Boolean(user), error, setSession: (session) => { writeAuthStorage(session); setUser(session.user); setError(null); }, logout: async () => { const token = readAuthStorage()?.refreshToken; try { await api.logout(token); } finally { clearAuthStorage(); setUser(null); } }, refreshUser: async () => { const current = await api.me(); setUser(current); }, hasRole: (...roles) => Boolean(user?.roles.some((role) => roles.includes(role))) }), [error, isLoading, user]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
-
-export function useAuth() {
-  const context = useContext(AuthContext);
-  if (!context) throw new Error('useAuth must be used within AuthProvider');
-  return context;
-}
+export function useAuth() { const context = useContext(AuthContext); if (!context) throw new Error('useAuth must be used within AuthProvider'); return context; }
