@@ -1,0 +1,2 @@
+export function LoadingState({ label = 'Loading…' }: { label?: string }) { return <div className="grid min-h-[240px] place-items-center text-sm text-slate-400"><div className="flex items-center gap-3"><span className="spinner" />{label}</div></div>; }
+export function ErrorState({ message = 'Something went wrong.' }: { message?: string }) { return <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 p-5 text-sm text-rose-200">{message}</div>; }
