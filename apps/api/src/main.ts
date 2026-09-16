@@ -1,12 +1,21 @@
 import { NestFactory } from '@nestjs/core';
-import { AppModule } from './app.module';
+import helmet from 'helmet';
+import { RootModule } from './root.module';
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { ApiResponseInterceptor } from './common/interceptors/api-response.interceptor';
+import { RequestLoggingMiddleware } from './common/middleware/request-logging.middleware';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { cors: true });
+  const app = await NestFactory.create(RootModule, { bufferLogs: true });
+  app.use(helmet());
+  app.enableCors({ origin: process.env.CORS_ORIGIN?.split(',') ?? true, credentials: true });
+  app.setGlobalPrefix('api/v1');
+  app.useGlobalPipes(new (await import('@nestjs/common')).ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
+  app.useGlobalFilters(new AllExceptionsFilter());
+  app.useGlobalInterceptors(new ApiResponseInterceptor());
+  app.use(new RequestLoggingMiddleware().use.bind(new RequestLoggingMiddleware()));
   const port = Number(process.env.PORT ?? 3001);
-
   await app.listen(port);
-  console.log(`API is running on http://localhost:${port}`);
+  console.log(`API is running on http://localhost:${port}/api/v1`);
 }
-
-bootstrap();
+bootstrap().catch((error: unknown) => { console.error('Unable to start API', error); process.exit(1); });
