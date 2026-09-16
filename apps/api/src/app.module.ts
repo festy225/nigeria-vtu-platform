@@ -10,10 +10,8 @@ import { AuthorizationExampleModule } from './modules/auth/authorization-example
 import { DatabaseModule } from './infrastructure/database/database.module';
 import { HealthModule } from './modules/health/health.module';
 import { UsersModule } from './modules/users/users.module';
+import { WalletModule } from './modules/wallets/wallet.module';
 
 @Global()
-@Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true, cache: true, expandVariables: true }), ThrottlerModule.forRoot({ throttlers: [{ ttl: 60_000, limit: 100 }] }), DatabaseModule, AuditModule, HealthModule, UsersModule, AuthModule, AuthorizationExampleModule],
-  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }, { provide: APP_GUARD, useClass: JwtAuthGuard }, { provide: APP_GUARD, useClass: RolesGuard }]
-})
+@Module({ imports: [ConfigModule.forRoot({ isGlobal: true, cache: true, expandVariables: true }), ThrottlerModule.forRoot({ throttlers: [{ ttl: 60_000, limit: 100 }] }), DatabaseModule, AuditModule, HealthModule, UsersModule, AuthModule, AuthorizationExampleModule, WalletModule], providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }, { provide: APP_GUARD, useClass: JwtAuthGuard }, { provide: APP_GUARD, useClass: RolesGuard }] })
 export class AppModule {}
