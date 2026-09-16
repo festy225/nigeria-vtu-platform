@@ -12,30 +12,16 @@ The repository is intentionally structured for future product expansion, with se
 - Root workspace configuration for local development orchestration
 - Environment templates for frontend and backend configuration
 - Documentation folder with setup and architecture guidance
+- Versioned PostgreSQL schema migration covering platform foundation entities
 - Git hygiene files and coding standards
 
 ## Important note
 
-This repository is the technical foundation only. It does not implement business services, provider integrations, payment flows, or actual VTU logic yet.
+This repository does not implement real provider integrations or credentials. Business service flows will be added after the foundation and database layer are reviewed.
 
-## Repository structure
+## Database
 
-```text
-.
-├── apps/
-│   ├── api/
-│   └── web/
-├── packages/
-│   └── shared/
-├── docs/
-├── .env.example
-├── .gitignore
-├── .editorconfig
-├── .gitattributes
-├── .nvmrc
-├── package.json
-└── README.md
-```
+The schema is in `database/migrations/0001_initial_schema.sql`. See `docs/database/README.md` for setup and verification instructions.
 
 ## Local development
 
@@ -67,24 +53,3 @@ npm run dev
 
 - Frontend: http://localhost:3000
 - API: http://localhost:3001
-
-## Environment files
-
-- Root `.env.example`
-- `apps/web/.env.example`
-- `apps/api/.env.example`
-
-Copy these to `.env` or use your local environment manager as needed.
-
-## Future roadmap
-
-Planned implementation phases include:
-
-- User roles and permissions
-- Wallet and ledger architecture
-- Transaction lifecycle and idempotency
-- Provider adapters and backup routing
-- Service modules for airtime, data, electricity, TV, vouchers, and e-commerce
-- Admin dashboard and audit tooling
-- Agent and vendor workflows
-- Security, monitoring, and reconciliation
