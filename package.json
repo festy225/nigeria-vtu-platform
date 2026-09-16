@@ -1,0 +1,27 @@
+{
+  "name": "nigeria-vtu-platform",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm --workspace apps/web run dev",
+    "dev:api": "npm --workspace apps/api run start:dev",
+    "dev": "concurrently \"npm run dev:api\" \"npm run dev:web\"",
+    "build:web": "npm --workspace apps/web run build",
+    "build:api": "npm --workspace apps/api run build",
+    "build": "npm run build:api && npm run build:web",
+    "lint:web": "npm --workspace apps/web run lint",
+    "lint:api": "npm --workspace apps/api run lint",
+    "lint": "npm run lint:api && npm run lint:web",
+    "typecheck:web": "npm --workspace apps/web run typecheck",
+    "typecheck:api": "npm --workspace apps/api run typecheck",
+    "typecheck": "npm run typecheck:api && npm run typecheck:web"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1",
+    "typescript": "^5.5.4"
+  }
+}
