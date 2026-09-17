@@ -1,21 +1,53 @@
 # Database
 
-The initial schema is PostgreSQL and is maintained as a versioned SQL migration.
+The database is PostgreSQL 15+ and migrations are applied by the API workspace migration runner. The runner executes migrations in order and records completed files in `schema_migrations`, so it is safe to run repeatedly.
 
 ## Requirements
 
 - PostgreSQL 15+
-- `psql` available on the PATH
-- A database URL or equivalent connection environment variables
+- Node.js 20+
+- npm 10+
+- Dependencies installed with `npm install`
 
-## Apply the migration
+## Configuration
+
+Copy `apps/api/.env.example` to `apps/api/.env` or export the variables in your shell. The migration runner accepts either `DATABASE_URL` or the individual `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_NAME`, `DATABASE_USER`, and `DATABASE_PASSWORD` variables. Set `DATABASE_SSL=true` when the database requires SSL.
+
+Example local configuration:
+
+```dotenv
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/nigeria_vtu_platform
+DATABASE_SSL=false
+```
+
+## Create the database and apply all migrations
 
 ```bash
 createdb nigeria_vtu_platform
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/migrations/0001_initial_schema.sql
+npm install
+npm --workspace apps/api run migrate
 ```
 
-The migration enables `pgcrypto` and `citext`. It creates the identity, wallet/ledger, service, provider, transaction, voucher, data-printing, bulk, e-commerce, notification, audit, API, webhook, and reconciliation tables.
+The runner applies these files in this exact order:
+
+1. `database/migrations/0001_initial_schema.sql`
+2. `database/migrations/0002_authentication.sql`
+3. `database/migrations/0003_wallet_operations.sql`
+4. `database/migrations/0005_feature_controls.sql`
+
+If the database already exists, omit `createdb` and run the migration command. Each migration runs in its own transaction; a failed migration is rolled back and is not recorded as applied.
+
+## Verification queries
+
+After applying the migration:
+
+```sql
+\dt
+\d ledger_entries
+SELECT version, applied_at FROM schema_migrations ORDER BY version;
+SELECT code, enabled FROM services ORDER BY code;
+SELECT conname FROM pg_constraint WHERE conrelid = 'ledger_entries'::regclass;
+```
 
 ## Important financial rules
 
@@ -26,16 +58,3 @@ The migration enables `pgcrypto` and `citext`. It creates the identity, wallet/l
 - `UNKNOWN` and `REQUIRES_VERIFICATION` are first-class transaction states. They must be verified before any safe retry or provider failover.
 - No Data-to-Money tables or service codes are present.
 - PIN/voucher values are represented as encrypted provider-delivered values; the schema does not generate them.
-
-## Verification queries
-
-After applying the migration:
-
-```sql
-\dt
-\d ledger_entries
-SELECT code, enabled FROM services ORDER BY code;
-SELECT conname FROM pg_constraint WHERE conrelid = 'ledger_entries'::regclass;
-```
-
-For ledger reconciliation, application code should periodically assert that each `ledger_transaction_id` has equal debit and credit totals and matching currency wallets.
