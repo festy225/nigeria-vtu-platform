@@ -5,13 +5,40 @@ import pg from 'pg';
 
 const { Client } = pg;
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(__dirname, '../..');
+const envCandidates = [
+  resolve(repoRoot, '.env'),
+  resolve(repoRoot, 'apps/api/.env'),
+  resolve(repoRoot, 'apps/api/.env.local'),
+  resolve(repoRoot, '.env.local')
+];
+
+for (const envFile of envCandidates) {
+  try {
+    const raw = await readFile(envFile, 'utf8');
+    for (const line of raw.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const match = trimmed.match(/^export\s+([A-Za-z_][A-Za-z0-9_]*)=(.*)$/) ?? trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+      if (!match) continue;
+      const [, key, value] = match;
+      if (process.env[key] === undefined) {
+        const parsedValue = value.trim();
+        process.env[key] = parsedValue.replace(/^['"]|['"]$/g, '');
+      }
+    }
+  } catch {
+    // Ignore missing environment files; shell environment wins.
+  }
+}
+
 const migrations = [
   '0001_initial_schema.sql',
   '0002_authentication.sql',
   '0003_wallet_operations.sql',
   '0005_feature_controls.sql'
 ];
-const migrationsDirectory = resolve(__dirname, '../../../database/migrations');
+const migrationsDirectory = resolve(repoRoot, 'database/migrations');
 const client = new Client({
   connectionString: process.env.DATABASE_URL,
   host: process.env.DATABASE_HOST,

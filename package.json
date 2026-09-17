@@ -18,7 +18,8 @@
     "lint": "npm run lint:api && npm run lint:web",
     "typecheck:web": "npm --workspace apps/web run typecheck",
     "typecheck:api": "npm --workspace apps/api run typecheck",
-    "typecheck": "npm run typecheck:api && npm run typecheck:web"
+    "typecheck": "npm run typecheck:api && npm run typecheck:web",
+    "migrate": "npm --workspace apps/api run migrate"
   },
   "devDependencies": {
     "concurrently": "^9.0.1",
