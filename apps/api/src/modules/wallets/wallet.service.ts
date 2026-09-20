@@ -65,8 +65,20 @@ export class WalletService {
   private async postTransfer(client: PoolClient, userId: string, sourceId: string, destinationId: string, request: TransferRequest, operation: 'TRANSFER') {
     const existing = await this.findIdempotent(client, userId, request.idempotencyKey, operation, request);
     if (existing) return existing;
-    const source = await this.lockWallet(client, sourceId, userId, request.currency);
-    const destination = await this.lockWallet(client, destinationId, undefined, request.currency);
+   const source = await this.lockWallet(
+  client,
+  sourceId,
+  userId,
+  request.currency,
+);
+
+const destination = await this.lockWallet(
+  client,
+  destinationId,
+  undefined,
+  request.currency,
+  'USER',
+);
     const balance = await client.query<{ available_minor: string }>(`SELECT available_minor FROM wallet_balances WHERE wallet_id=$1 FOR UPDATE`, [source.id]);
     if (BigInt(balance.rows[0]?.available_minor ?? 0) < BigInt(request.amountMinor)) throw new BadRequestException('Insufficient wallet balance');
     const result = await this.postEntries(client, source.id, destination.id, request.amountMinor, request, operation);
@@ -82,12 +94,38 @@ export class WalletService {
     return { reference, ledgerTransactionId: tx.rows[0].id, amountMinor: amount, currency: request.currency, status: 'SUCCESSFUL' };
   }
 
-  private async lockWallet(client: PoolClient, walletId: string, userId: string | undefined, currency: CurrencyCode) {
-    const result = await client.query<{ id: string }>(`SELECT id FROM wallets WHERE id=$1 AND currency=$2 AND status='ACTIVE' AND ($3::uuid IS NULL OR user_id=$3) FOR UPDATE`, [walletId, currency, userId ?? null]);
-    if (!result.rows[0]) throw new NotFoundException('Active wallet not found');
-    await client.query(`INSERT INTO wallet_balances(wallet_id) VALUES($1) ON CONFLICT DO NOTHING`, [walletId]);
-    return result.rows[0];
+  private async lockWallet(
+  client: PoolClient,
+  walletId: string,
+  userId: string | undefined,
+  currency: CurrencyCode,
+  walletKind?: 'USER' | 'SYSTEM',
+) {
+  const result = await client.query<{ id: string }>(
+    `SELECT id
+     FROM wallets
+     WHERE id=$1
+       AND currency=$2
+       AND status='ACTIVE'
+       AND ($3::uuid IS NULL OR user_id=$3)
+       AND ($4::varchar IS NULL OR wallet_kind=$4)
+     FOR UPDATE`,
+    [walletId, currency, userId ?? null, walletKind ?? null],
+  );
+
+  if (!result.rows[0]) {
+    throw new NotFoundException('Active wallet not found');
   }
+
+  await client.query(
+    `INSERT INTO wallet_balances(wallet_id)
+     VALUES($1)
+     ON CONFLICT DO NOTHING`,
+    [walletId],
+  );
+
+  return result.rows[0];
+}
 
   private async getSystemWallet(client: PoolClient, currency: CurrencyCode) {
     const result = await client.query<{ id: string }>(`SELECT id FROM wallets WHERE wallet_kind='SYSTEM' AND currency=$1 AND status='ACTIVE' FOR UPDATE`, [currency]);

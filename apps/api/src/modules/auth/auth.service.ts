@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { randomBytes, createHash } from 'crypto';
+import { randomBytes, randomUUID, createHash } from 'crypto';
 import * as bcrypt from 'bcryptjs';
 import { DatabaseService } from '../../infrastructure/database/database.service';
 import type { UserRole } from '@nigeria-vtu-platform/shared';
@@ -12,44 +12,100 @@ import type { AuthenticatedUser, AuthSession } from './auth.types';
 export class AuthService {
   constructor(private readonly db: DatabaseService, private readonly jwt: JwtService, private readonly config: ConfigService) {}
 
-  async register(input: { email?: string; phone?: string; password: string }, request: Request) {
-    const email = input.email?.trim().toLowerCase() || null;
-    const phone = input.phone?.trim() || null;
-    if (!email && !phone) throw new BadRequestException('Email or phone is required');
-    const passwordHash = await bcrypt.hash(input.password, 12);
-    try {
-      const result = await this.db.withTransaction(async (client) => {
-        const inserted = await client.query<{ id: string; email: string | null; phone: string | null }>(`INSERT INTO users (email, phone, password_hash, status) VALUES ($1,$2,$3,'ACTIVE') RETURNING id,email,phone`, [email, phone, passwordHash]);
-        const user = inserted.rows[0];
-        const role = await client.query<{ id: string }>(`SELECT id FROM roles WHERE code = 'CUSTOMER'`);
-        if (!role.rows[0]) throw new Error('Customer role is not seeded');
-        await client.query(`INSERT INTO user_roles (user_id, role_id) VALUES ($1,$2)`, [user.id, role.rows[0].id]);
-        return user;
-      });
-      return this.issueSession({ id: result.id, email: result.email, phone: result.phone, roles: ['CUSTOMER'] }, request);
-    } catch (error) {
-      if ((error as { code?: string }).code === '23505') throw new ConflictException('An account already exists with those details');
-      throw error;
-    }
-  }
+ async register(input: { email?: string; phone?: string; password: string }, request: Request) {
+  const email = input.email?.trim().toLowerCase() || null;
+  const phone = input.phone?.trim() || null;
 
+  if (!email && !phone) throw new BadRequestException('Email or phone is required');
+
+  const passwordHash = await bcrypt.hash(input.password, 12);
+
+  try {
+    const result = await this.db.withTransaction(async (client) => {
+      const inserted = await client.query<{
+        id: string;
+        email: string | null;
+        phone: string | null;
+      }>(
+        `INSERT INTO users (email, phone, password_hash, status)
+         VALUES ($1, $2, $3, 'ACTIVE')
+         RETURNING id, email, phone`,
+        [email, phone, passwordHash],
+      );
+
+      const user = inserted.rows[0];
+
+      const role = await client.query<{ id: string }>(
+        `SELECT id FROM roles WHERE code = 'CUSTOMER'`,
+      );
+
+      if (!role.rows[0]) {
+        throw new Error('Customer role is not seeded');
+      }
+
+      await client.query(
+        `INSERT INTO user_roles (user_id, role_id)
+         VALUES ($1, $2)`,
+        [user.id, role.rows[0].id],
+      );
+
+      // Create the customer's NGN and USD wallets.
+      const wallets = await client.query<{ id: string; currency: 'NGN' | 'USD' }>(
+        `INSERT INTO wallets (user_id, currency, wallet_kind, status)
+         VALUES
+           ($1, 'NGN', 'USER', 'ACTIVE'),
+           ($1, 'USD', 'USER', 'ACTIVE')
+         RETURNING id, currency`,
+        [user.id],
+      );
+
+      // Create zero-balance records for both wallets.
+      for (const wallet of wallets.rows) {
+        await client.query(
+          `INSERT INTO wallet_balances (wallet_id, available_minor, held_minor)
+           VALUES ($1, 0, 0)
+           ON CONFLICT (wallet_id) DO NOTHING`,
+          [wallet.id],
+        );
+      }
+
+      return user;
+    });
+
+    return this.issueSession(
+      {
+        id: result.id,
+        email: result.email,
+        phone: result.phone,
+        roles: ['CUSTOMER'],
+      },
+      request,
+    );
+  } catch (error) {
+    if ((error as { code?: string }).code === '23505') {
+      throw new ConflictException('An account already exists with those details');
+    }
+
+    throw error;
+  }
+}
   async login(identifier: string, password: string, request: Request) {
     const normalized = identifier.trim().toLowerCase();
-    const result = await this.db.query<{ id: string; email: string | null; phone: string | null; password_hash: string; status: string; roles: UserRole[] }>(`SELECT u.id,u.email,u.phone,u.password_hash,u.status,COALESCE(array_agg(r.code) FILTER (WHERE r.code IS NOT NULL),'{}') roles FROM users u LEFT JOIN user_roles ur ON ur.user_id=u.id LEFT JOIN roles r ON r.id=ur.role_id WHERE u.email=$1 OR u.phone=$1 GROUP BY u.id`, [normalized]);
+    const result = await this.db.query<{ id: string; email: string | null; phone: string | null; password_hash: string; status: string; roles: UserRole[] }>(`SELECT u.id,u.email,u.phone,u.password_hash,u.status,COALESCE(array_agg(r.code::text) FILTER (WHERE r.code IS NOT NULL),'{}') roles FROM users u LEFT JOIN user_roles ur ON ur.user_id=u.id LEFT JOIN roles r ON r.id=ur.role_id WHERE u.email=$1 OR u.phone=$1 GROUP BY u.id`, [normalized]);
     const user = result.rows[0];
     if (!user || user.status !== 'ACTIVE' || !user.password_hash || !(await bcrypt.compare(password, user.password_hash))) throw new UnauthorizedException('Invalid credentials');
     return this.issueSession({ id: user.id, email: user.email, phone: user.phone, roles: user.roles }, request);
   }
 
   async currentUser(userId: string): Promise<AuthenticatedUser> {
-    const result = await this.db.query<{ id: string; email: string | null; phone: string | null; status: string; roles: UserRole[] }>(`SELECT u.id,u.email,u.phone,u.status,COALESCE(array_agg(r.code) FILTER (WHERE r.code IS NOT NULL),'{}') roles FROM users u LEFT JOIN user_roles ur ON ur.user_id=u.id LEFT JOIN roles r ON r.id=ur.role_id WHERE u.id=$1 GROUP BY u.id`, [userId]);
+    const result = await this.db.query<{ id: string; email: string | null; phone: string | null; status: string; roles: UserRole[] }>(`SELECT u.id,u.email,u.phone,u.status,COALESCE(array_agg(r.code::text) FILTER (WHERE r.code IS NOT NULL),'{}') roles FROM users u LEFT JOIN user_roles ur ON ur.user_id=u.id LEFT JOIN roles r ON r.id=ur.role_id WHERE u.id=$1 GROUP BY u.id`, [userId]);
     const user = result.rows[0];
     if (!user || user.status !== 'ACTIVE') throw new UnauthorizedException('Account is not active');
     return { id: user.id, email: user.email, phone: user.phone, roles: user.roles };
   }
 
   async issueSession(user: AuthenticatedUser, request: Request) {
-    const sessionId = randomBytes(18).toString('hex');
+    const sessionId = randomUUID();
     const accessToken = await this.jwt.signAsync({ sub: user.id, sessionId, roles: user.roles, email: user.email, phone: user.phone }, { secret: this.config.getOrThrow('JWT_ACCESS_SECRET'), expiresIn: this.config.get('JWT_ACCESS_TOKEN_TTL', '15m') });
     const refreshToken = randomBytes(48).toString('base64url');
     const expiresAt = new Date(Date.now() + this.durationMs(this.config.get('JWT_REFRESH_TOKEN_TTL', '7d')));
@@ -58,7 +114,7 @@ export class AuthService {
   }
 
   async refresh(refreshToken: string, request: Request) {
-    const result = await this.db.query<AuthSession & { email: string | null; phone: string | null; roles: UserRole[] }>(`SELECT s.id,s.user_id,s.refresh_token_hash,s.expires_at,s.revoked_at,u.email,u.phone,COALESCE(array_agg(r.code) FILTER (WHERE r.code IS NOT NULL),'{}') roles FROM auth_sessions s JOIN users u ON u.id=s.user_id LEFT JOIN user_roles ur ON ur.user_id=u.id LEFT JOIN roles r ON r.id=ur.role_id WHERE s.refresh_token_hash=$1 GROUP BY s.id,u.id`, [this.hashToken(refreshToken)]);
+    const result = await this.db.query<AuthSession & { email: string | null; phone: string | null; roles: UserRole[] }>(`SELECT s.id,s.user_id,s.refresh_token_hash,s.expires_at,s.revoked_at,u.email,u.phone,COALESCE(array_agg(r.code::text) FILTER (WHERE r.code IS NOT NULL),'{}') roles FROM auth_sessions s JOIN users u ON u.id=s.user_id LEFT JOIN user_roles ur ON ur.user_id=u.id LEFT JOIN roles r ON r.id=ur.role_id WHERE s.refresh_token_hash=$1 GROUP BY s.id,u.id`, [this.hashToken(refreshToken)]);
     const session = result.rows[0];
     if (!session || session.revoked_at || new Date(session.expires_at) <= new Date()) throw new UnauthorizedException('Invalid refresh token');
     await this.db.query(`UPDATE auth_sessions SET revoked_at=now(),last_used_at=now() WHERE id=$1`, [session.id]);

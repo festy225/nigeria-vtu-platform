@@ -1,10 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
-import { JwtAuthGuard } from './common/auth/jwt-auth.guard';
-import { RolesGuard } from './common/auth/roles.guard';
-import { FeatureGuard } from './common/features/feature.guard';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AuthorizationExampleModule } from './modules/auth/authorization-example.module';
@@ -30,11 +26,6 @@ import { FeatureCheckModule } from './modules/features/feature-check.module';
     FeatureModule,
     FeatureCheckModule
   ],
-  providers: [
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
-    { provide: APP_GUARD, useClass: JwtAuthGuard },
-    { provide: APP_GUARD, useClass: RolesGuard },
-    { provide: APP_GUARD, useClass: FeatureGuard }
-  ]
+  providers: []
 })
 export class AppModule {}

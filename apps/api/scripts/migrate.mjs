@@ -5,7 +5,7 @@ import pg from 'pg';
 
 const { Client } = pg;
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(__dirname, '../..');
+const repoRoot = resolve(__dirname, '../../..');
 const envCandidates = [
   resolve(repoRoot, '.env'),
   resolve(repoRoot, 'apps/api/.env'),
@@ -36,7 +36,8 @@ const migrations = [
   '0001_initial_schema.sql',
   '0002_authentication.sql',
   '0003_wallet_operations.sql',
-  '0005_feature_controls.sql'
+  '0005_feature_controls.sql',
+  '0006_system_wallets.sql'
 ];
 const migrationsDirectory = resolve(repoRoot, 'database/migrations');
 const client = new Client({
