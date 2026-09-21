@@ -45,3 +45,18 @@ Frontend -> API -> Core application services -> Database/Redis
 ```
 
 The frontend and backend communicate through a typed API contract pattern. Provider credentials are not exposed to the browser.
+
+## Payment Provider Architecture
+
+```text
+Customer
+    -> PaymentService
+    -> PaymentProviderRouterService
+    -> PaymentProviderAdapter
+    -> Mock Provider now / real provider later
+    -> Webhook or verification
+    -> Settlement
+    -> Wallet and ledger
+```
+
+The provider adapter foundation does not settle funding intents. Initialization and verification remain separate from payment settlement, and the current funding flow remains `PENDING` until a later verified server-side settlement flow is implemented. Provider routing follows the existing primary, backup, priority, enabled, and health concepts; backup selection is only permitted when a failure is known to be safe to retry. Provider credentials must never be stored in frontend code or committed to Git.
