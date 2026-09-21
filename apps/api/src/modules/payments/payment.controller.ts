@@ -1,0 +1,15 @@
+import { Body, Controller, Post } from '@nestjs/common';
+import { CurrentUser } from '../../common/auth/current-user.decorator';
+import type { AuthenticatedUser } from '../auth/auth.types';
+import { FundWalletDto } from './dto/fund-wallet.dto';
+import { PaymentService } from './payment.service';
+
+@Controller('payments')
+export class PaymentController {
+  constructor(private readonly payments: PaymentService) {}
+
+  @Post('fund')
+  fund(@CurrentUser() user: AuthenticatedUser, @Body() dto: FundWalletDto) {
+    return this.payments.createFundingIntent(user.id, dto);
+  }
+}

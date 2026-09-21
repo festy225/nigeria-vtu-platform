@@ -10,6 +10,7 @@ import { UsersModule } from './modules/users/users.module';
 import { WalletModule } from './modules/wallets/wallet.module';
 import { FeatureModule } from './modules/features/feature.module';
 import { FeatureCheckModule } from './modules/features/feature-check.module';
+import { PaymentModule } from './modules/payments/payment.module';
 
 @Global()
 @Module({
@@ -24,7 +25,8 @@ import { FeatureCheckModule } from './modules/features/feature-check.module';
     AuthorizationExampleModule,
     WalletModule,
     FeatureModule,
-    FeatureCheckModule
+    FeatureCheckModule,
+    PaymentModule
   ],
   providers: []
 })
