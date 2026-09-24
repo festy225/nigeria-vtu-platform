@@ -1,6 +1,22 @@
 import type { Metadata } from 'next';
-import { AuthProvider } from '@/components/providers/auth-provider';
 import './globals.css';
+import { AuthProvider } from '@/components/providers/auth-provider';
 
-export const metadata: Metadata = { title: 'VTUPay', description: 'Digital services and wallet platform.' };
-export default function RootLayout({ children }: { children: React.ReactNode }) { return <html lang="en"><body><AuthProvider>{children}</AuthProvider></body></html>; }
+export const metadata: Metadata = {
+  title: 'Naivex',
+  description: 'Naivex digital services and marketplace platform',
+};
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html lang="en">
+      <body>
+        <AuthProvider>{children}</AuthProvider>
+      </body>
+    </html>
+  );
+}

@@ -11,6 +11,7 @@ import { WalletModule } from './modules/wallets/wallet.module';
 import { FeatureModule } from './modules/features/feature.module';
 import { FeatureCheckModule } from './modules/features/feature-check.module';
 import { PaymentModule } from './modules/payments/payment.module';
+import { AirtimeModule } from './modules/airtime/airtime.module';
 
 @Global()
 @Module({
@@ -26,7 +27,8 @@ import { PaymentModule } from './modules/payments/payment.module';
     WalletModule,
     FeatureModule,
     FeatureCheckModule,
-    PaymentModule
+    PaymentModule,
+    AirtimeModule
   ],
   providers: []
 })

@@ -31,14 +31,18 @@ for (const envFile of envCandidates) {
     // Ignore missing environment files; shell environment wins.
   }
 }
-
 const migrations = [
   '0001_initial_schema.sql',
   '0002_authentication.sql',
   '0003_wallet_operations.sql',
   '0005_feature_controls.sql',
-  '0006_system_wallets.sql'
+  '0006_system_wallets.sql',
+  '0007_payment_provider_initialization.sql',
+  '0008_naivex_feature_controls.sql',
+  '0009_add_seller_stores_feature.sql',
+  '0010_marketplace_operating_regions.sql'
 ];
+
 const migrationsDirectory = resolve(repoRoot, 'database/migrations');
 const client = new Client({
   connectionString: process.env.DATABASE_URL,

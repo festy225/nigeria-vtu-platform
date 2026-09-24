@@ -46,6 +46,15 @@ Frontend -> API -> Core application services -> Database/Redis
 
 The frontend and backend communicate through a typed API contract pattern. Provider credentials are not exposed to the browser.
 
+Payment initialization follows this boundary:
+
+```text
+Customer -> PaymentService -> PaymentProviderRouter -> PaymentProviderAdapter
+         -> Provider initialization -> PENDING payment
+```
+
+Provider initialization returns checkout information but does not mean the customer has paid. The payment and deposit remain `PENDING`; wallet balances and ledger entries are changed only by a later verified settlement flow.
+
 ## Payment Provider Architecture
 
 ```text

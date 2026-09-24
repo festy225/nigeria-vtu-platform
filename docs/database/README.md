@@ -34,6 +34,8 @@ The runner applies these files in this exact order:
 2. `database/migrations/0002_authentication.sql`
 3. `database/migrations/0003_wallet_operations.sql`
 4. `database/migrations/0005_feature_controls.sql`
+5. `database/migrations/0006_system_wallets.sql`
+6. `database/migrations/0007_payment_provider_initialization.sql`
 
 If the database already exists, omit `createdb` and run the migration command. Each migration runs in its own transaction; a failed migration is rolled back and is not recorded as applied.
 

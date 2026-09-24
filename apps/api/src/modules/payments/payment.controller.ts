@@ -10,6 +10,6 @@ export class PaymentController {
 
   @Post('fund')
   fund(@CurrentUser() user: AuthenticatedUser, @Body() dto: FundWalletDto) {
-    return this.payments.createFundingIntent(user.id, dto);
+    return this.payments.createFundingIntent(user.id, user.email, dto);
   }
 }

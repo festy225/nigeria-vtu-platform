@@ -2,6 +2,7 @@ import { Body, Controller, Get, NotFoundException, Param, Patch } from '@nestjs/
 import { Roles } from '../../common/auth/auth.decorators';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/auth.types';
+import { UpdateFeatureToggleDto } from './feature.dtos';
 import { FeatureService } from './feature.service';
 
 @Controller('features')
@@ -17,10 +18,10 @@ export class FeatureController {
   @Roles('ADMIN', 'SUPER_ADMIN')
   async update(
     @Param('key') key: string,
-    @Body() body: { enabled: boolean },
+    @Body() dto: UpdateFeatureToggleDto,
     @CurrentUser() user: AuthenticatedUser
   ) {
-    const updated = await this.features.setEnabled(key, body.enabled, user.id);
+    const updated = await this.features.setEnabled(key, dto.enabled, user.id);
     if (!updated) throw new NotFoundException('Feature toggle not found');
     return updated;
   }

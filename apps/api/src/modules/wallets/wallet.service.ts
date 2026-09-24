@@ -53,7 +53,316 @@ export class WalletService {
       return this.saveIdempotency(client, userId, request, operation, result);
     });
   }
+  async hold(
+    userId: string,
+    walletId: string,
+    transactionId: string,
+    amountMinor: number,
+    currency: CurrencyCode,
+    description?: string,
+  ) {
+    if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) {
+      throw new BadRequestException(
+        'amountMinor must be a positive integer',
+      );
+    }
 
+    return this.db.withTransaction(async (client) => {
+      const wallet = await this.lockWallet(
+        client,
+        walletId,
+        userId,
+        currency,
+      );
+
+      await client.query(
+        `INSERT INTO wallet_balances(wallet_id)
+         VALUES($1)
+         ON CONFLICT DO NOTHING`,
+        [wallet.id],
+      );
+
+      const balance = await client.query<{
+        available_minor: string;
+      }>(
+        `SELECT available_minor
+         FROM wallet_balances
+         WHERE wallet_id=$1
+         FOR UPDATE`,
+        [wallet.id],
+      );
+
+      if (
+        BigInt(balance.rows[0]?.available_minor ?? 0) <
+        BigInt(amountMinor)
+      ) {
+        throw new BadRequestException(
+          'Insufficient wallet balance',
+        );
+      }
+
+      const existing = await client.query<{
+        id: string;
+        wallet_id: string;
+        amount_minor: string;
+        released_at: string | null;
+        captured_at: string | null;
+      }>(
+        `SELECT id, wallet_id, amount_minor, released_at, captured_at
+         FROM wallet_holds
+         WHERE transaction_id=$1
+         FOR UPDATE`,
+        [transactionId],
+      );
+
+      if (existing.rows[0]) {
+        const hold = existing.rows[0];
+
+        if (
+          hold.wallet_id !== wallet.id ||
+          BigInt(hold.amount_minor) !== BigInt(amountMinor)
+        ) {
+          throw new ConflictException(
+            'Transaction already has a different wallet hold',
+          );
+        }
+
+        return {
+          holdId: hold.id,
+          transactionId,
+          walletId: wallet.id,
+          amountMinor,
+          currency,
+          status: hold.captured_at
+            ? 'CAPTURED'
+            : hold.released_at
+              ? 'RELEASED'
+              : 'HELD',
+        };
+      }
+
+      await client.query(
+        `UPDATE wallet_balances
+         SET available_minor = available_minor - $1,
+             held_minor = held_minor + $1,
+             version = version + 1,
+             updated_at = now()
+         WHERE wallet_id = $2`,
+        [amountMinor, wallet.id],
+      );
+
+      const result = await client.query<{ id: string }>(
+        `INSERT INTO wallet_holds(
+           wallet_id,
+           transaction_id,
+           amount_minor
+         )
+         VALUES($1,$2,$3)
+         RETURNING id`,
+        [wallet.id, transactionId, amountMinor],
+      );
+
+      return {
+        holdId: result.rows[0].id,
+        transactionId,
+        walletId: wallet.id,
+        amountMinor,
+        currency,
+        status: 'HELD',
+      };
+    });
+  }
+
+  async captureHold(
+    userId: string,
+    transactionId: string,
+  ) {
+    return this.db.withTransaction(async (client) => {
+      const result = await client.query<{
+        id: string;
+        wallet_id: string;
+        amount_minor: string;
+        captured_at: string | null;
+        released_at: string | null;
+        currency: CurrencyCode;
+      }>(
+        `SELECT
+           h.id,
+           h.wallet_id,
+           h.amount_minor,
+           h.captured_at,
+           h.released_at,
+           w.currency
+         FROM wallet_holds h
+         JOIN wallets w ON w.id=h.wallet_id
+         WHERE h.transaction_id=$1
+           AND w.user_id=$2
+         FOR UPDATE`,
+        [transactionId, userId],
+      );
+
+      const hold = result.rows[0];
+
+      if (!hold) {
+        throw new NotFoundException(
+          'Wallet hold not found',
+        );
+      }
+
+      if (hold.captured_at) {
+        return {
+          holdId: hold.id,
+          transactionId,
+          amountMinor: Number(hold.amount_minor),
+          currency: hold.currency,
+          status: 'CAPTURED',
+        };
+      }
+
+      if (hold.released_at) {
+        throw new ConflictException(
+          'Wallet hold has already been released',
+        );
+      }
+
+      const balance = await client.query(
+        `SELECT held_minor
+         FROM wallet_balances
+         WHERE wallet_id=$1
+         FOR UPDATE`,
+        [hold.wallet_id],
+      );
+
+      if (
+        BigInt(balance.rows[0]?.held_minor ?? 0) <
+        BigInt(hold.amount_minor)
+      ) {
+        throw new ConflictException(
+          'Wallet held balance is inconsistent',
+        );
+      }
+
+      await client.query(
+        `UPDATE wallet_balances
+         SET held_minor = held_minor - $1,
+             version = version + 1,
+             updated_at = now()
+         WHERE wallet_id=$2`,
+        [hold.amount_minor, hold.wallet_id],
+      );
+
+      await client.query(
+        `UPDATE wallet_holds
+         SET captured_at=now()
+         WHERE id=$1`,
+        [hold.id],
+      );
+
+      return {
+        holdId: hold.id,
+        transactionId,
+        amountMinor: Number(hold.amount_minor),
+        currency: hold.currency,
+        status: 'CAPTURED',
+      };
+    });
+  }
+
+  async releaseHold(
+    userId: string,
+    transactionId: string,
+  ) {
+    return this.db.withTransaction(async (client) => {
+      const result = await client.query<{
+        id: string;
+        wallet_id: string;
+        amount_minor: string;
+        captured_at: string | null;
+        released_at: string | null;
+        currency: CurrencyCode;
+      }>(
+        `SELECT
+           h.id,
+           h.wallet_id,
+           h.amount_minor,
+           h.captured_at,
+           h.released_at,
+           w.currency
+         FROM wallet_holds h
+         JOIN wallets w ON w.id=h.wallet_id
+         WHERE h.transaction_id=$1
+           AND w.user_id=$2
+         FOR UPDATE`,
+        [transactionId, userId],
+      );
+
+      const hold = result.rows[0];
+
+      if (!hold) {
+        throw new NotFoundException(
+          'Wallet hold not found',
+        );
+      }
+
+      if (hold.released_at) {
+        return {
+          holdId: hold.id,
+          transactionId,
+          amountMinor: Number(hold.amount_minor),
+          currency: hold.currency,
+          status: 'RELEASED',
+        };
+      }
+
+      if (hold.captured_at) {
+        throw new ConflictException(
+          'Wallet hold has already been captured',
+        );
+      }
+
+      const balance = await client.query(
+        `SELECT held_minor
+         FROM wallet_balances
+         WHERE wallet_id=$1
+         FOR UPDATE`,
+        [hold.wallet_id],
+      );
+
+      if (
+        BigInt(balance.rows[0]?.held_minor ?? 0) <
+        BigInt(hold.amount_minor)
+      ) {
+        throw new ConflictException(
+          'Wallet held balance is inconsistent',
+        );
+      }
+
+      await client.query(
+        `UPDATE wallet_balances
+         SET available_minor = available_minor + $1,
+             held_minor = held_minor - $1,
+             version = version + 1,
+             updated_at = now()
+         WHERE wallet_id=$2`,
+        [hold.amount_minor, hold.wallet_id],
+      );
+
+      await client.query(
+        `UPDATE wallet_holds
+         SET released_at=now()
+         WHERE id=$1`,
+        [hold.id],
+      );
+
+      return {
+        holdId: hold.id,
+        transactionId,
+        amountMinor: Number(hold.amount_minor),
+        currency: hold.currency,
+        status: 'RELEASED',
+      };
+    });
+  }
   async reverse(userId: string, originalReference: string, idempotencyKey: string, reason?: string) {
     return this.db.withTransaction(async (client) => {
       const original = await client.query<{ id: string; currency: CurrencyCode; amount_minor: string; operation: string; wallet_id: string; user_id: string }>(`SELECT lt.id,lt.currency,le.amount_minor,lt.operation,le.wallet_id,w.user_id FROM ledger_transactions lt JOIN ledger_entries le ON le.ledger_transaction_id=lt.id JOIN wallets w ON w.id=le.wallet_id WHERE lt.reference=$1 AND le.entry_type='DEBIT'`, [originalReference]);
