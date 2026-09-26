@@ -1,8 +1,12 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Injectable,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import type { AirtimeProvider } from '../interfaces/airtime-provider.interface';
 
 export interface AirtimeProviderRegistration {
   provider: AirtimeProvider;
+  providerId: string;
   priority: number;
   isPrimary: boolean;
   isBackup: boolean;
@@ -17,19 +21,19 @@ export class AirtimeProviderRouterService {
     this.registrations = registrations;
   }
 
-  async getProvider(): Promise<AirtimeProvider> {
+  async getProvider(): Promise<AirtimeProviderRegistration> {
     return this.selectProvider(false);
   }
 
   async getProviderForRetry(
     safeToRetry: boolean,
-  ): Promise<AirtimeProvider> {
+  ): Promise<AirtimeProviderRegistration> {
     return this.selectProvider(safeToRetry);
   }
 
   private async selectProvider(
     allowBackup: boolean,
-  ): Promise<AirtimeProvider> {
+  ): Promise<AirtimeProviderRegistration> {
     const primary = await this.sortedAvailable(
       this.registrations.filter(
         (registration) => registration.isPrimary,
@@ -39,7 +43,7 @@ export class AirtimeProviderRouterService {
     const selectedPrimary = primary[0];
 
     if (selectedPrimary) {
-      return selectedPrimary.provider;
+      return selectedPrimary;
     }
 
     if (allowBackup) {
@@ -50,7 +54,7 @@ export class AirtimeProviderRouterService {
       );
 
       if (backup[0]) {
-        return backup[0].provider;
+        return backup[0];
       }
     }
 

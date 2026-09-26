@@ -26,17 +26,83 @@ export class WalletService {
     return this.db.withTransaction((client) => this.postTransfer(client, userId, sourceWalletId, request.destinationWalletId, request, 'TRANSFER'));
   }
 
-  async credit(userId: string, walletId: string, request: MoneyRequest, operation: 'DEPOSIT' | 'REFUND' | 'COMMISSION' = 'DEPOSIT') {
-    this.validateAmount(request);
-    return this.db.withTransaction(async (client) => {
-      const existing = await this.findIdempotent(client, userId, request.idempotencyKey, operation, request);
-      if (existing) return existing;
-      const wallet = await this.lockWallet(client, walletId, userId, request.currency);
-      const system = await this.getSystemWallet(client, request.currency);
-      const result = await this.postEntries(client, system.id, wallet.id, request.amountMinor, request, operation);
-      await client.query(`UPDATE wallet_balances SET available_minor=available_minor+$1,version=version+1,updated_at=now() WHERE wallet_id=$2`, [request.amountMinor, wallet.id]);
-      return this.saveIdempotency(client, userId, request, operation, result);
-    });
+  async credit(
+  userId: string,
+  walletId: string,
+  request: MoneyRequest,
+  operation: 'DEPOSIT' | 'REFUND' | 'COMMISSION' = 'DEPOSIT',
+) {
+  this.validateAmount(request);
+
+  return this.db.withTransaction((client) =>
+    this.creditWithClient(
+      client,
+      userId,
+      walletId,
+      request,
+      operation,
+    ),
+  );
+}
+
+async creditWithClient(
+  client: PoolClient,
+  userId: string,
+  walletId: string,
+  request: MoneyRequest,
+  operation: 'DEPOSIT' | 'REFUND' | 'COMMISSION' = 'DEPOSIT',
+) {
+  this.validateAmount(request);
+
+  const existing = await this.findIdempotent(
+    client,
+    userId,
+    request.idempotencyKey,
+    operation,
+    request,
+  );
+
+  if (existing) {
+    return existing;
+  }
+
+  const wallet = await this.lockWallet(
+    client,
+    walletId,
+    userId,
+    request.currency,
+  );
+
+  const system = await this.getSystemWallet(
+    client,
+    request.currency,
+  );
+
+  const result = await this.postEntries(
+    client,
+    system.id,
+    wallet.id,
+    request.amountMinor,
+    request,
+    operation,
+  );
+
+  await client.query(
+    `UPDATE wallet_balances
+     SET available_minor = available_minor + $1,
+         version = version + 1,
+         updated_at = now()
+     WHERE wallet_id = $2`,
+    [request.amountMinor, wallet.id],
+  );
+
+  return this.saveIdempotency(
+    client,
+    userId,
+    request,
+    operation,
+    result,
+  );
   }
 
   async debit(userId: string, walletId: string, request: MoneyRequest, operation: 'WITHDRAWAL' | 'SERVICE_PURCHASE' = 'WITHDRAWAL') {
