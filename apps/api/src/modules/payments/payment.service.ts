@@ -6,6 +6,7 @@ import type { CurrencyCode } from '@nigeria-vtu-platform/shared';
 import { DatabaseService } from '../../infrastructure/database/database.service';
 import { PaymentProviderRouterService } from '../providers/routing/payment-provider-router.service';
 import type { FundWalletDto } from './dto/fund-wallet.dto';
+import { WalletService } from '../wallets/wallet.service';
 
 interface FundingIntentRow {
   payment_id: string;
@@ -37,6 +38,7 @@ export class PaymentService {
     private readonly db: DatabaseService,
     private readonly providers: PaymentProviderRouterService,
     private readonly config: ConfigService,
+    private readonly walletService: WalletService,
   ) {}
 
   async createFundingIntent(userId: string, customerEmail: string | null, request: FundWalletDto) {
@@ -149,6 +151,182 @@ if (response.status !== 'PENDING') {
       if (error instanceof ServiceUnavailableException) throw error;
       throw new BadGatewayException('Payment provider initialization failed');
     }
+  }
+
+  async completeFromWebhook(
+    rawPayload: unknown,
+    headers: Record<string, string | string[] | undefined> = {},
+  ) {
+    const provider = await this.providers.getProvider();
+
+    const verification = await provider.verifyWebhook({
+      rawPayload,
+      headers,
+    });
+
+    if (!verification.valid) {
+      throw new BadRequestException('Invalid payment provider webhook');
+    }
+
+    const event = provider.parseWebhook(verification.rawPayload);
+
+    if (!event.paymentReference || !event.providerReference) {
+      throw new BadRequestException(
+        'Payment webhook is missing required references',
+      );
+    }
+
+    return this.db.withTransaction(async (client) => {
+      const result = await client.query<{
+        payment_id: string;
+        payment_reference: string;
+        payment_user_id: string;
+        payment_amount_minor: string;
+        payment_currency: CurrencyCode;
+        payment_state: string;
+        payment_provider_name: string | null;
+        payment_provider_reference: string | null;
+        provider_reference: string | null;
+        deposit_id: string;
+        deposit_wallet_id: string;
+        deposit_amount_minor: string;
+        deposit_currency: CurrencyCode;
+        deposit_state: string;
+      }>(
+        `SELECT
+           p.id payment_id,
+           p.reference payment_reference,
+           p.user_id payment_user_id,
+           p.amount_minor payment_amount_minor,
+           p.currency payment_currency,
+           p.state payment_state,
+           p.provider_name payment_provider_name,
+           p.provider_reference payment_provider_reference,
+           d.id deposit_id,
+           d.wallet_id deposit_wallet_id,
+           d.amount_minor deposit_amount_minor,
+           d.currency deposit_currency,
+           d.state deposit_state
+         FROM payments p
+         JOIN deposits d ON d.id = p.deposit_id
+         WHERE p.reference = $1
+         FOR UPDATE OF p,d`,
+        [event.paymentReference],
+      );
+
+      const payment = result.rows[0];
+
+      if (!payment) {
+        throw new NotFoundException('Payment not found');
+      }
+
+      if (
+        payment.provider_reference &&
+        payment.provider_reference !== event.providerReference
+      ) {
+        throw new ConflictException(
+          'Payment provider reference does not match',
+        );
+      }
+
+      if (
+        Number(payment.payment_amount_minor) !== event.amountMinor ||
+        payment.payment_currency !== event.currency
+      ) {
+        throw new ConflictException(
+          'Payment amount or currency does not match',
+        );
+      }
+
+      if (
+        payment.payment_provider_name &&
+        payment.payment_provider_name !== event.providerName
+      ) {
+        throw new ConflictException('Payment provider does not match');
+      }
+
+      if (payment.payment_state === 'SUCCESSFUL') {
+        return {
+          status: 'SUCCESSFUL',
+          paymentReference: payment.payment_reference,
+          alreadyProcessed: true,
+        };
+      }
+
+      if (event.status === 'FAILED') {
+        await client.query(
+          `UPDATE payments
+           SET state='FAILED',
+               provider_status='FAILED',
+               provider_metadata=$1
+           WHERE id=$2`,
+          [JSON.stringify(event.rawPayload), payment.payment_id],
+        );
+
+        await client.query(
+          `UPDATE deposits
+           SET state='FAILED',
+               external_reference=$1
+           WHERE id=$2`,
+          [event.providerReference, payment.deposit_id],
+        );
+
+        return {
+          status: 'FAILED',
+          paymentReference: payment.payment_reference,
+          alreadyProcessed: false,
+        };
+      }
+
+      if (event.status !== 'SUCCESS') {
+        return {
+          status: 'PENDING',
+          paymentReference: payment.payment_reference,
+          alreadyProcessed: false,
+        };
+      }
+
+      await this.walletService.creditWithClient(
+        client,
+        payment.payment_user_id,
+        payment.deposit_wallet_id,
+        {
+          amountMinor: Number(payment.deposit_amount_minor),
+          currency: payment.deposit_currency,
+          idempotencyKey: `payment-deposit:${payment.payment_id}`,
+          description: `Wallet funding ${payment.payment_reference}`,
+        },
+        'DEPOSIT',
+      );
+
+      await client.query(
+        `UPDATE payments
+         SET state='SUCCESSFUL',
+             provider_reference=$1,
+             provider_status='SUCCESS',
+             provider_metadata=$2
+         WHERE id=$3`,
+        [
+          event.providerReference,
+          JSON.stringify(event.rawPayload),
+          payment.payment_id,
+        ],
+      );
+
+      await client.query(
+        `UPDATE deposits
+         SET state='SUCCESSFUL',
+             external_reference=$1
+         WHERE id=$2`,
+        [event.providerReference, payment.deposit_id],
+      );
+
+      return {
+        status: 'SUCCESSFUL',
+        paymentReference: payment.payment_reference,
+        alreadyProcessed: false,
+      };
+    });
   }
 
   private callbackUrl() {
