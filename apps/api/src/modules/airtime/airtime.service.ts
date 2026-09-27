@@ -216,7 +216,7 @@ export class AirtimeService {
    * WalletService owns its own database transaction.
    */
       try {
-      const hold = await this.wallets.hold(
+      await this.wallets.hold(
         userId,
         wallet.id,
         transactionResult.id,
