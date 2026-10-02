@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Roles } from '../../common/auth/auth.decorators';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { FeatureGuard } from '../../common/features/feature.guard';
 import { RequiresFeature } from '../../common/features/feature.decorator';
@@ -10,6 +11,13 @@ import { SellerService } from './seller.service';
 @UseGuards(FeatureGuard)
 export class SellerController {
   constructor(private readonly sellers: SellerService) {}
+
+  @Get('applications')
+  @Roles('SUPER_ADMIN')
+  @RequiresFeature('SELLER_STORES_ENABLED')
+  listApplications() {
+    return this.sellers.listApplications();
+  }
 
   @Post('application')
   @RequiresFeature('SELLER_STORES_ENABLED')

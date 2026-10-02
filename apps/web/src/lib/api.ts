@@ -253,4 +253,7 @@ passwordResetConfirm: (token: string, password: string) =>
 
   getSellerApplication: () =>
     authenticatedFetch<SellerApplication>('/sellers/application'),
+
+  getSellerApplications: () =>
+    authenticatedFetch<SellerApplication[]>('/sellers/applications'),
 };

@@ -11,6 +11,29 @@ import type { CreateSellerApplicationDto } from './seller.dtos';
 export class SellerService {
   constructor(private readonly database: DatabaseService) {}
 
+  async listApplications() {
+    const result = await this.database.query(
+      `SELECT
+        id,
+        user_id,
+        seller_type,
+        business_name,
+        store_name,
+        store_slug,
+        onboarding_status,
+        kyc_status,
+        risk_status,
+        reviewed_by,
+        reviewed_at,
+        created_at,
+        updated_at
+       FROM marketplace_sellers
+       ORDER BY created_at DESC, id DESC`,
+    );
+
+    return result.rows;
+  }
+
   async createApplication(
     userId: string,
     dto: CreateSellerApplicationDto,
@@ -123,4 +146,3 @@ export class SellerService {
     return slug.slice(0, 220);
   }
 }
-
