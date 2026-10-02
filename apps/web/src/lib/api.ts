@@ -20,10 +20,16 @@ export interface AuthUser {
   roles: string[];
 }
 
+export interface VerificationResponse {
+  purpose: 'EMAIL_VERIFICATION' | 'PHONE_VERIFICATION';
+  token?: string;
+}
+
 export interface AuthSessionResponse {
   accessToken: string;
   refreshToken: string;
   user: AuthUser;
+  verification?: VerificationResponse[];
 }
 
 export type AuthStorage = {
@@ -121,11 +127,80 @@ export async function authenticatedFetch<T>(path: string, init: RequestInit = {}
 }
 
 export const api = {
-  login: (payload: { identifier: string; password: string }) => fetchJson<AuthSessionResponse>('/auth/login', { method: 'POST', body: JSON.stringify(payload) }),
-  register: (payload: { email?: string; phone?: string; password: string }) => fetchJson<AuthSessionResponse>('/auth/register', { method: 'POST', body: JSON.stringify(payload) }),
-  me: async (): Promise<AuthUser> => (await authenticatedFetch<{ user: AuthUser }>('/auth/me')).user,
-  refresh: (refreshToken: string) => fetchJson<AuthSessionResponse>('/auth/refresh', { method: 'POST', body: JSON.stringify({ refreshToken }) }),
-  logout: (refreshToken?: string) => fetchJson<{ loggedOut: boolean }>('/auth/logout', { method: 'POST', body: JSON.stringify({ refreshToken }) }),
-  wallets: () => authenticatedFetch<WalletApiRecord[]>('/wallets'),
-  walletStatement: (currency?: 'NGN' | 'USD') => authenticatedFetch<WalletStatementRecord[]>(`/wallets/statement${currency ? `?currency=${encodeURIComponent(currency)}` : ''}`)
+  login: (payload: { identifier: string; password: string }) =>
+    fetchJson<AuthSessionResponse>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+passwordResetRequest: (identifier: string) =>
+  fetchJson<{
+    accepted: boolean;
+    token?: string;
+  }>('/auth/password-reset/request', {
+    method: 'POST',
+    body: JSON.stringify({ identifier }),
+  }),
+
+passwordResetConfirm: (token: string, password: string) =>
+  fetchJson<{ reset: boolean }>('/auth/password-reset/confirm', {
+    method: 'POST',
+    body: JSON.stringify({ token, password }),
+  }),
+  register: (payload: {
+  name: string;
+  email: string;
+  phone: string;
+  password: string;
+  confirmPassword: string;
+}) =>
+    fetchJson<AuthSessionResponse>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  verifyEmail: (token: string) =>
+    fetchJson<{ verified: boolean; type: 'email' }>('/auth/verify-email', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    }),
+
+  verifyPhone: (token: string) =>
+    fetchJson<{ verified: boolean; type: 'phone' }>('/auth/verify-phone', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    }),
+
+  resendVerification: (identifier: string) =>
+    fetchJson<{
+      accepted: boolean;
+      verification?: VerificationResponse;
+    }>('/auth/verification/resend', {
+      method: 'POST',
+      body: JSON.stringify({ identifier }),
+    }),
+
+  me: async (): Promise<AuthUser> =>
+    (await authenticatedFetch<{ user: AuthUser }>('/auth/me')).user,
+
+  refresh: (refreshToken: string) =>
+    fetchJson<AuthSessionResponse>('/auth/refresh', {
+      method: 'POST',
+      body: JSON.stringify({ refreshToken }),
+    }),
+
+  logout: (refreshToken?: string) =>
+    fetchJson<{ loggedOut: boolean }>('/auth/logout', {
+      method: 'POST',
+      body: JSON.stringify({ refreshToken }),
+    }),
+
+  wallets: () =>
+    authenticatedFetch<WalletApiRecord[]>('/wallets'),
+
+  walletStatement: (currency?: 'NGN' | 'USD') =>
+    authenticatedFetch<WalletStatementRecord[]>(
+      `/wallets/statement${
+        currency ? `?currency=${encodeURIComponent(currency)}` : ''
+      }`,
+    ),
 };

@@ -43,7 +43,9 @@ const migrations = [
   '0010_marketplace_operating_regions.sql',
   '0011_provider_configuration_null_uniqueness.sql',
   '0012_add_provider_adapter_key.sql',
-  '0013_provider_configuration_role_uniqueness.sql'
+  '0013_provider_configuration_role_uniqueness.sql',
+  '0014_marketplace_seller_foundation.sql',
+  '0015_marketplace_seller_foundation_completion.sql'
 ];
 
 const migrationsDirectory = resolve(repoRoot, 'database/migrations');
@@ -71,7 +73,7 @@ try {
     if (applied.rowCount) {
       console.log(`Skipping ${migration} (already applied)`);
       continue;
-    }
+  }
 
     const sql = await readFile(join(migrationsDirectory, migration), 'utf8');
     console.log(`Applying ${migration}`);
@@ -83,7 +85,7 @@ try {
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
-    }
+   }
   }
 
   console.log('Database migrations complete.');

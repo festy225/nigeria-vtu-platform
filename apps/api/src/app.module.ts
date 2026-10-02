@@ -12,6 +12,7 @@ import { FeatureModule } from './modules/features/feature.module';
 import { FeatureCheckModule } from './modules/features/feature-check.module';
 import { PaymentModule } from './modules/payments/payment.module';
 import { AirtimeModule } from './modules/airtime/airtime.module';
+import { SellerModule } from './modules/sellers/seller.module';
 
 @Global()
 @Module({
@@ -28,8 +29,8 @@ import { AirtimeModule } from './modules/airtime/airtime.module';
     FeatureModule,
     FeatureCheckModule,
     PaymentModule,
-    AirtimeModule
+    AirtimeModule,
+    SellerModule
   ],
-  providers: []
-})
+  providers: []})
 export class AppModule {}

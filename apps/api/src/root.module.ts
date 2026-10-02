@@ -14,7 +14,7 @@ import { RolesGuard } from './common/auth/roles.guard';
       isGlobal: true,
       cache: true,
       expandVariables: true,
-      envFilePath: join(process.cwd(), 'apps/api/.env'),
+      envFilePath: join(process.cwd(), '../../.env'),
     }),
     JwtModule.registerAsync({
       imports: [ConfigModule],
