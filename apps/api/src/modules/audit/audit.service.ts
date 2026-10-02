@@ -20,9 +20,31 @@ export class AuditService {
 
   async record(event: AuditEvent): Promise<void> {
     await this.database.query(
-      `INSERT INTO audit_logs (actor_id, action, resource_type, resource_id, before_data, after_data, reason, ip_address, user_agent, correlation_id)
-       VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8::inet,$9,$10)`,
-      [event.actorId ?? null, event.action, event.resourceType, event.resourceId ?? null, JSON.stringify(event.beforeData ?? null), JSON.stringify(event.afterData ?? null), event.reason ?? null, event.ipAddress ?? null, event.userAgent ?? null, event.correlationId ?? null]
+      `INSERT INTO audit_logs (
+        actor_id,
+        action,
+        resource_type,
+        resource_id,
+        before_data,
+        after_data,
+        reason,
+        ip_address,
+        user_agent,
+        correlation_id
+      )
+      VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8::inet,$9,$10)`,
+      [
+        event.actorId ?? null,
+        event.action,
+        event.resourceType,
+        event.resourceId ?? null,
+        JSON.stringify(event.beforeData ?? null),
+        JSON.stringify(event.afterData ?? null),
+        event.reason ?? null,
+        event.ipAddress ?? null,
+        event.userAgent ?? null,
+        event.correlationId ?? null,
+      ],
     );
   }
 }
