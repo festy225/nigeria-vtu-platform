@@ -32,6 +32,16 @@ function transactionTone(
   return entry === 'CREDIT' ? 'success' : 'neutral';
 }
 
+const opportunities = [
+  {
+    title: 'Grow your business with CHIMZO',
+    description:
+      'Open your seller store and reach customers through the CHIMZO marketplace.',
+    action: 'Become a Seller',
+    href: '/dashboard/business/seller',
+  },
+];
+
 export default function DashboardPage() {
   const [wallets, setWallets] = useState<WalletApiRecord[]>([]);
   const [statement, setStatement] = useState<WalletStatementRecord[]>([]);
@@ -253,6 +263,36 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
+
+      {/* Business opportunities */}
+      <section className="space-y-4" aria-label="Business opportunities">
+        {opportunities.map((opportunity) => (
+          <div
+            key={opportunity.href}
+            className="flex flex-col gap-5 overflow-hidden rounded-2xl bg-gradient-to-r from-[#0B1220] to-[#172554] p-6 text-white shadow-lg sm:flex-row sm:items-center sm:justify-between sm:p-8"
+          >
+            <div className="max-w-2xl">
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-blue-300">
+                Business opportunity
+              </p>
+              <h2 className="mt-2 text-xl font-bold">
+                {opportunity.title}
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-slate-300">
+                {opportunity.description}
+              </p>
+            </div>
+
+            <Link
+              href={opportunity.href}
+              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-[#155EEF] px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 focus:ring-offset-[#0B1220]"
+            >
+              {opportunity.action}
+              <span aria-hidden="true">→</span>
+            </Link>
+          </div>
+        ))}
+      </section>
 
       {/* Quick actions */}
       <section>

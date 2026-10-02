@@ -56,6 +56,42 @@ export interface WalletStatementRecord {
   created_at: string;
 }
 
+export type SellerType =
+  | 'RETAILER'
+  | 'VENDOR'
+  | 'WHOLESALER'
+  | 'DISTRIBUTOR';
+
+export interface SellerApplication {
+  id: string;
+  user_id: string;
+  seller_type: SellerType;
+  business_name: string;
+  store_name: string;
+  store_slug: string;
+  onboarding_status:
+    | 'DRAFT'
+    | 'SUBMITTED'
+    | 'UNDER_REVIEW'
+    | 'MORE_INFORMATION_REQUIRED'
+    | 'APPROVED'
+    | 'SUSPENDED'
+    | 'REJECTED';
+  kyc_status:
+    | 'PENDING'
+    | 'IN_REVIEW'
+    | 'VERIFIED'
+    | 'REJECTED';
+  risk_status:
+    | 'NORMAL'
+    | 'WATCH'
+    | 'HIGH'
+    | 'RESTRICTED';
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
 type ApiEnvelope<T> = {
   success: boolean;
   data?: T;
@@ -203,4 +239,18 @@ passwordResetConfirm: (token: string, password: string) =>
         currency ? `?currency=${encodeURIComponent(currency)}` : ''
       }`,
     ),
+
+  createSellerApplication: (payload: {
+    sellerType: SellerType;
+    businessName: string;
+    storeName: string;
+    storeSlug?: string;
+  }) =>
+    authenticatedFetch<SellerApplication>('/sellers/application', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  getSellerApplication: () =>
+    authenticatedFetch<SellerApplication>('/sellers/application'),
 };
