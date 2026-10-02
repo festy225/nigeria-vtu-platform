@@ -14,7 +14,6 @@ import type { Request } from 'express';
 import { ProviderRegistryService } from '../registry/provider-registry.service';
 import { CreateProviderDto } from '../dto/create-provider.dto';
 import { CreateProviderConfigurationDto } from '../dto/create-provider-configuration.dto';
-
 import { RolesGuard } from '../../../common/auth/roles.guard';
 import { Roles } from '../../../common/auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
@@ -131,8 +130,11 @@ export class ProviderManagementController {
   }
 
   @Get(':id/health')
-  async findHealth(@Param('id', new ParseUUIDPipe()) providerId: string) {
-    const health = await this.providerRegistry.findProviderHealth(providerId);
+  async findHealth(
+    @Param('id', new ParseUUIDPipe()) providerId: string,
+  ) {
+    const health =
+      await this.providerRegistry.findProviderHealth(providerId);
 
     return {
       success: true,
