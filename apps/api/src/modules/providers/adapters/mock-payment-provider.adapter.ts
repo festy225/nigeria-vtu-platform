@@ -14,10 +14,11 @@ import type {
 @Injectable()
 export class MockPaymentProviderAdapter implements PaymentProvider {
   readonly name = 'MOCK';
+  readonly runtimeMode = 'test-only' as const;
 
-  async initializePayment(request: InitializePaymentRequest): Promise<InitializePaymentResponse> {
+  initializePayment(request: InitializePaymentRequest): Promise<InitializePaymentResponse> {
     const providerReference = `MOCK-${randomUUID()}`;
-    return {
+    return Promise.resolve({
       providerName: this.name,
       providerReference,
       checkoutUrl: `http://localhost/mock-payment?reference=${encodeURIComponent(providerReference)}`,
@@ -30,11 +31,11 @@ export class MockPaymentProviderAdapter implements PaymentProvider {
         currency: request.currency,
         status: 'PENDING',
       },
-    };
+    });
   }
 
-  async verifyPayment(request: VerifyPaymentRequest): Promise<VerifyPaymentResponse> {
-    return {
+  verifyPayment(request: VerifyPaymentRequest): Promise<VerifyPaymentResponse> {
+    return Promise.resolve({
       providerName: this.name,
       providerReference: request.providerReference,
       status: 'PENDING',
@@ -46,11 +47,11 @@ export class MockPaymentProviderAdapter implements PaymentProvider {
         providerReference: request.providerReference,
         status: 'PENDING',
       },
-    };
+    });
   }
 
-  async verifyWebhook(request: VerifyWebhookRequest): Promise<VerifyWebhookResponse> {
-    return { valid: true, rawPayload: request.rawPayload };
+  verifyWebhook(request: VerifyWebhookRequest): Promise<VerifyWebhookResponse> {
+    return Promise.resolve({ valid: true, rawPayload: request.rawPayload });
   }
 
   parseWebhook(rawPayload: unknown): PaymentWebhookEvent {
@@ -69,8 +70,8 @@ export class MockPaymentProviderAdapter implements PaymentProvider {
     };
   }
 
-  async isAvailable(): Promise<boolean> {
-    return true;
+  isAvailable(): Promise<boolean> {
+    return Promise.resolve(true);
   }
 
   private asRecord(value: unknown): Record<string, unknown> {

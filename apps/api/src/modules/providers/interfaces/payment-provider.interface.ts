@@ -62,6 +62,7 @@ export interface PaymentWebhookEvent {
 
 export interface PaymentProvider {
   readonly name: string;
+  readonly runtimeMode: 'production' | 'test-only';
   initializePayment(request: InitializePaymentRequest): Promise<InitializePaymentResponse>;
   verifyPayment(request: VerifyPaymentRequest): Promise<VerifyPaymentResponse>;
   verifyWebhook(request: VerifyWebhookRequest): Promise<VerifyWebhookResponse>;

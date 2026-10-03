@@ -11,6 +11,8 @@ import { AddMarketplaceCartItemDto } from '../src/modules/marketplace-cart/dto/a
 import { UpdateMarketplaceCartItemDto } from '../src/modules/marketplace-cart/dto/update-marketplace-cart-item.dto';
 import { MarketplaceCartController } from '../src/modules/marketplace-cart/marketplace-cart.controller';
 import { MarketplaceCartService } from '../src/modules/marketplace-cart/marketplace-cart.service';
+import { FeatureGuard } from '../src/common/features/feature.guard';
+import { FEATURE_KEY } from '../src/common/features/feature.decorator';
 
 type QueryFunction = (
   query: string,
@@ -34,9 +36,14 @@ describe('MarketplaceCartService', () => {
     resolveSimpleProduct: jest.fn(),
     resolveVariantProduct: jest.fn(),
   };
+  const orders = {
+    createPendingPaymentOrder: jest.fn(),
+    getPendingPaymentOrder: jest.fn(),
+  };
   const service = new MarketplaceCartService(
     database as never,
     prices as never,
+    orders as never,
   );
   const cart = {
     id: 'cart-id',
@@ -71,6 +78,20 @@ describe('MarketplaceCartService', () => {
     client.query.mockResolvedValue({ rows: [], rowCount: 0 });
     prices.resolveSimpleProduct.mockResolvedValue(simplePrice);
     prices.resolveVariantProduct.mockResolvedValue(variantPrice);
+    orders.createPendingPaymentOrder.mockResolvedValue({
+      id: 'pending-order-id',
+      status: 'PENDING_PAYMENT',
+      totalMinor: 2500,
+      currency: 'USD',
+      items: [],
+    });
+    orders.getPendingPaymentOrder.mockResolvedValue({
+      id: 'pending-order-id',
+      status: 'PENDING_PAYMENT',
+      totalMinor: 2500,
+      currency: 'USD',
+      items: [],
+    });
   });
 
   const mockSimpleAdd = (existingItems: Array<Record<string, unknown>> = []) => {
@@ -381,16 +402,145 @@ describe('MarketplaceCartService', () => {
   it('uses authenticated user context for cart controller operations', async () => {
     const carts = {
       addItem: jest.fn().mockResolvedValue({ id: 'cart-id' }),
+      checkout: jest.fn().mockResolvedValue({ id: 'order-id' }),
     };
     const controller = new MarketplaceCartController(carts as never);
 
+    await controller.checkout({ id: 'authenticated-user-id' } as never);
     await controller.addItem(
       { id: 'authenticated-user-id' } as never,
       { productId: product.id, quantity: 1 },
     );
+    expect(carts.checkout).toHaveBeenCalledWith('authenticated-user-id');
     expect(carts.addItem).toHaveBeenCalledWith(
       'authenticated-user-id',
       { productId: product.id, quantity: 1 },
+    );
+  });
+
+  it('rejects checkout without creating or accessing another account cart', async () => {
+    client.query.mockResolvedValueOnce({ rows: [] });
+
+    await expect(service.checkout('authenticated-user-id')).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(client.query.mock.calls[0]?.[1]).toEqual([
+      'authenticated-user-id',
+    ]);
+    expect(client.query.mock.calls[0]?.[0]).toContain(
+      'WHERE user_id = $1',
+    );
+    expect(client.query.mock.calls[0]?.[0]).toContain('FOR UPDATE');
+    expect(orders.createPendingPaymentOrder).not.toHaveBeenCalled();
+  });
+
+  it('rejects an empty owned cart', async () => {
+    client.query
+      .mockResolvedValueOnce({ rows: [{ id: 'owned-cart-id', pending_order_id: null }] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await expect(service.checkout('authenticated-user-id')).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(client.query.mock.calls[1]?.[1]).toEqual(['owned-cart-id']);
+    expect(orders.createPendingPaymentOrder).not.toHaveBeenCalled();
+  });
+
+  it('converts only the authenticated user cart to a backend-priced pending order', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{ id: 'owned-cart-id', pending_order_id: null }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          productId: product.id,
+          variantId: null,
+          quantity: 2,
+          priceMinor: 1,
+          currency: 'GBP',
+          sellerId: 'untrusted-seller',
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [{ id: 'owned-cart-id' }] });
+
+    const result = await service.checkout('authenticated-user-id');
+
+    expect(orders.createPendingPaymentOrder).toHaveBeenCalledWith(
+      client,
+      'authenticated-user-id',
+      [{ productId: product.id, variantId: undefined, quantity: 2 }],
+    );
+    expect(result).toMatchObject({
+      id: 'pending-order-id',
+      status: 'PENDING_PAYMENT',
+      totalMinor: 2500,
+      currency: 'USD',
+      payment: { status: 'NOT_INITIATED' },
+    });
+    expect(client.query.mock.calls[0]?.[1]).toEqual([
+      'authenticated-user-id',
+    ]);
+    expect(client.query.mock.calls[1]?.[0]).toContain('ORDER BY product_id');
+    expect(client.query.mock.calls[2]?.[1]).toEqual([
+      'pending-order-id',
+      'owned-cart-id',
+      'authenticated-user-id',
+    ]);
+  });
+
+  it('returns the existing pending order on repeated checkout without reserving again', async () => {
+    client.query.mockResolvedValueOnce({
+      rows: [{
+        id: 'owned-cart-id',
+        pending_order_id: 'pending-order-id',
+      }],
+    });
+
+    const result = await service.checkout('authenticated-user-id');
+
+    expect(orders.getPendingPaymentOrder).toHaveBeenCalledWith(
+      client,
+      'authenticated-user-id',
+      'pending-order-id',
+    );
+    expect(orders.createPendingPaymentOrder).not.toHaveBeenCalled();
+    expect(client.query).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      id: 'pending-order-id',
+      payment: { status: 'NOT_INITIATED' },
+    });
+  });
+
+  it('blocks cart edits while its pending order remains unpaid', async () => {
+    client.query.mockResolvedValueOnce({
+      rows: [{
+        id: 'owned-cart-id',
+        pending_order_id: 'pending-order-id',
+      }],
+    });
+
+    await expect(
+      service.clearCart('authenticated-user-id'),
+    ).rejects.toThrow(ConflictException);
+    expect(client.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps checkout behind the disabled marketplace feature guard', async () => {
+    const isEnabled = jest.fn().mockResolvedValue(false);
+    const guard = new FeatureGuard(
+      { getAllAndOverride: () => 'MARKETPLACE_ENABLED' } as never,
+      { isEnabled } as never,
+    );
+
+    await expect(
+      guard.canActivate({
+        getHandler: () => undefined,
+        getClass: () => MarketplaceCartController,
+      } as never),
+    ).rejects.toThrow();
+    expect(isEnabled).toHaveBeenCalledWith('MARKETPLACE_ENABLED');
+    expect(Reflect.getMetadata(FEATURE_KEY, MarketplaceCartController)).toBe(
+      'MARKETPLACE_ENABLED',
     );
   });
 

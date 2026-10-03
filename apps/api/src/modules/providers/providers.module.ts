@@ -6,6 +6,7 @@ import { ProviderRegistryService } from './registry/provider-registry.service';
 import { MockAirtimeProviderAdapter } from './adapters/mock-airtime-provider.adapter';
 import { AirtimeProviderAdapterResolver } from './adapters/airtime-provider-adapter.resolver';
 import { MockPaymentProviderAdapter } from './adapters/mock-payment-provider.adapter';
+import { PaymentProviderAdapterResolver } from './adapters/payment-provider-adapter.resolver';
 import {
   KYC_PROVIDER_ADAPTERS,
   KycProviderAdapterResolver,
@@ -16,12 +17,7 @@ import {
 } from './routing/airtime-provider-router.service';
 import {
   PaymentProviderRouterService,
-  type PaymentProviderRegistration,
 } from './routing/payment-provider-router.service';
-
-export const PAYMENT_PROVIDER_REGISTRATIONS = Symbol(
-  'PAYMENT_PROVIDER_REGISTRATIONS',
-);
 
 export const AIRTIME_PROVIDER_REGISTRATIONS = Symbol(
   'AIRTIME_PROVIDER_REGISTRATIONS',
@@ -40,30 +36,8 @@ export const AIRTIME_PROVIDER_REGISTRATIONS = Symbol(
     KycProviderAdapterResolver,
     MockAirtimeProviderAdapter,
     AirtimeProviderAdapterResolver,
-
-    {
-      provide: PAYMENT_PROVIDER_REGISTRATIONS,
-      inject: [MockPaymentProviderAdapter],
-      useFactory: (
-        mockProvider: MockPaymentProviderAdapter,
-      ): PaymentProviderRegistration[] => [
-        {
-          provider: mockProvider,
-          priority: 100,
-          isPrimary: true,
-          isBackup: false,
-          enabled: true,
-        },
-      ],
-    },
-
-    {
-      provide: PaymentProviderRouterService,
-      inject: [PAYMENT_PROVIDER_REGISTRATIONS],
-      useFactory: (
-        registrations: PaymentProviderRegistration[],
-      ) => new PaymentProviderRouterService(registrations),
-    },
+    PaymentProviderAdapterResolver,
+    PaymentProviderRouterService,
 
     {
       provide: AIRTIME_PROVIDER_REGISTRATIONS,

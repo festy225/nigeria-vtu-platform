@@ -208,6 +208,281 @@ describe('MarketplaceOrderService foundation', () => {
     ]);
   });
 
+  it('locks inventory and conditionally reserves it to prevent concurrent checkout overselling', async () => {
+    client.query
+      .mockResolvedValueOnce({ rows: [product] })
+      .mockResolvedValueOnce({ rows: [simplePricing] })
+      .mockResolvedValueOnce({ rows: [order] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 'order-item-id' }] })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'inventory-id',
+          on_hand_quantity: 10,
+          reserved_quantity: 2,
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [{ id: 'inventory-id' }] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const result = await service.createPendingPaymentOrder(
+      client as never,
+      'authenticated-customer-id',
+      [{ productId: product.id, quantity: 3 }],
+    );
+
+    expect(result).toMatchObject({
+      customerId: 'authenticated-customer-id',
+      status: 'PENDING_PAYMENT',
+      currency: 'USD',
+      subtotalMinor: 4500,
+      totalMinor: 4500,
+      items: [{
+        productId: product.id,
+        sellerId: 'seller-derived-from-product',
+        productName: 'Current product name',
+        productDescription: 'Current product description',
+        quantity: 3,
+        unitPriceMinor: 1500,
+        lineTotalMinor: 4500,
+        currency: 'USD',
+      }],
+    });
+    expect(client.query.mock.calls[3]?.[1]).toEqual([
+      'PENDING_PAYMENT',
+      order.id,
+    ]);
+    expect(client.query.mock.calls[5]?.[0]).toContain('FOR UPDATE');
+    expect(client.query.mock.calls[6]?.[0]).toContain(
+      'on_hand_quantity - reserved_quantity >= $1',
+    );
+    expect(client.query.mock.calls[6]?.[0]).toContain('RETURNING id');
+    expect(client.query.mock.calls[6]?.[1]).toEqual([3, 'inventory-id']);
+    expect(client.query.mock.calls[7]?.[0]).toContain(
+      'marketplace_order_inventory_reservations',
+    );
+    expect(client.query.mock.calls[7]?.[1]).toEqual([
+      order.id,
+      'order-item-id',
+      'inventory-id',
+      3,
+    ]);
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'MARKETPLACE_ORDER_PENDING_PAYMENT_CREATED',
+        resourceId: order.id,
+      }),
+      client,
+    );
+  });
+
+  it('rejects missing or insufficient inventory without recording an order reservation', async () => {
+    client.query
+      .mockResolvedValueOnce({ rows: [product] })
+      .mockResolvedValueOnce({ rows: [simplePricing] })
+      .mockResolvedValueOnce({ rows: [order] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 'order-item-id' }] })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'inventory-id',
+          on_hand_quantity: 4,
+          reserved_quantity: 2,
+        }],
+      });
+
+    await expect(
+      service.createPendingPaymentOrder(
+        client as never,
+        'customer-id',
+        [{ productId: product.id, quantity: 3 }],
+      ),
+    ).rejects.toThrow(ConflictException);
+
+    expect(client.query).toHaveBeenCalledTimes(6);
+    expect(client.query.mock.calls.some(([query]) =>
+      String(query).includes('INSERT INTO marketplace_order_inventory_reservations'),
+    )).toBe(false);
+  });
+
+  it('rejects checkout when inventory has not been configured', async () => {
+    client.query
+      .mockResolvedValueOnce({ rows: [product] })
+      .mockResolvedValueOnce({ rows: [simplePricing] })
+      .mockResolvedValueOnce({ rows: [order] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 'order-item-id' }] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await expect(
+      service.createPendingPaymentOrder(
+        client as never,
+        'customer-id',
+        [{ productId: product.id, quantity: 1 }],
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(client.query).toHaveBeenCalledTimes(6);
+  });
+
+  it('does not return a pending order to a different customer', async () => {
+    client.query.mockResolvedValueOnce({ rows: [] });
+
+    await expect(
+      service.getPendingPaymentOrder(
+        client as never,
+        'different-customer-id',
+        'pending-order-id',
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(client.query.mock.calls[0]?.[0]).toContain(
+      'WHERE id = $1 AND customer_id = $2',
+    );
+    expect(client.query.mock.calls[0]?.[1]).toEqual([
+      'pending-order-id',
+      'different-customer-id',
+    ]);
+  });
+
+  it('rejects a product which became disabled before checkout', async () => {
+    client.query
+      .mockResolvedValueOnce({ rows: [product] })
+      .mockResolvedValueOnce({
+        rows: [{ ...simplePricing, enabled: false }],
+      });
+
+    await expect(
+      service.createPendingPaymentOrder(
+        client as never,
+        'customer-id',
+        [{ productId: product.id, quantity: 1 }],
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(client.query).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a product which is no longer live during checkout', async () => {
+    client.query
+      .mockResolvedValueOnce({ rows: [product] })
+      .mockResolvedValueOnce({
+        rows: [{ ...simplePricing, status: 'DRAFT' }],
+      });
+
+    await expect(
+      service.createPendingPaymentOrder(
+        client as never,
+        'customer-id',
+        [{ productId: product.id, quantity: 1 }],
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(client.query).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects missing and disabled variants during checkout', async () => {
+    client.query
+      .mockResolvedValueOnce({ rows: [{ ...product, has_variants: true }] })
+      .mockResolvedValueOnce({ rows: [variantPricing] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await expect(
+      service.createPendingPaymentOrder(
+        client as never,
+        'customer-id',
+        [{
+          productId: product.id,
+          variantId: 'missing-variant',
+          quantity: 1,
+        }],
+      ),
+    ).rejects.toThrow(NotFoundException);
+
+    client.query
+      .mockReset()
+      .mockResolvedValueOnce({ rows: [{ ...product, has_variants: true }] })
+      .mockResolvedValueOnce({ rows: [variantPricing] })
+      .mockResolvedValueOnce({
+        rows: [{ ...variant, enabled: false }],
+      });
+
+    await expect(
+      service.createPendingPaymentOrder(
+        client as never,
+        'customer-id',
+        [{
+          productId: product.id,
+          variantId: variant.id,
+          quantity: 1,
+        }],
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(client.query).toHaveBeenCalledTimes(3);
+  });
+
+  it('reserves variant inventory and snapshots the selected variant attributes', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{ ...product, has_variants: true }],
+      })
+      .mockResolvedValueOnce({ rows: [variantPricing] })
+      .mockResolvedValueOnce({ rows: [variant] })
+      .mockResolvedValueOnce({ rows: attributes })
+      .mockResolvedValueOnce({ rows: [order] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 'variant-order-item-id' }] })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'variant-inventory-id',
+          on_hand_quantity: 6,
+          reserved_quantity: 1,
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [{ id: 'variant-inventory-id' }] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const result = await service.createPendingPaymentOrder(
+      client as never,
+      'customer-id',
+      [{ productId: product.id, variantId: variant.id, quantity: 2 }],
+    );
+
+    expect(result.items[0]).toMatchObject({
+      variantId: variant.id,
+      sku: variant.sku,
+      variantDescription: attributes,
+      unitPriceMinor: 1500,
+      lineTotalMinor: 3000,
+    });
+    expect(client.query.mock.calls[7]?.[1]).toEqual([
+      product.id,
+      variant.id,
+    ]);
+    expect(client.query.mock.calls[9]?.[1]).toEqual([
+      order.id,
+      'variant-order-item-id',
+      'variant-inventory-id',
+      2,
+    ]);
+  });
+
+  it('uses the pending-payment status and durable reservation linkage in the migration', () => {
+    const migration = readFileSync(
+      resolve(
+        __dirname,
+        '../../../database/migrations/0032_marketplace_checkout_reservations.sql',
+      ),
+      'utf8',
+    );
+    expect(migration).toContain("ADD VALUE 'PENDING_PAYMENT'");
+    expect(migration).toContain('pending_order_id uuid UNIQUE');
+    expect(migration).toContain('marketplace_order_inventory_reservations');
+    expect(migration).toContain(
+      'REFERENCES marketplace_order_items(id, order_id)',
+    );
+    expect(migration).toContain(
+      'REFERENCES marketplace_product_inventory(id)',
+    );
+    expect(migration).toContain("'RESERVED', 'RELEASED', 'CONSUMED'");
+  });
+
   it('rejects zero, negative, fractional, and out-of-range quantities before opening a transaction', async () => {
     for (const quantity of [0, -1, 1.5, 2147483648]) {
       await expect(

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -10,10 +11,12 @@ import {
   type MarketplaceResolvedPrice,
   type MarketplaceResolvedVariantPrice,
 } from '../marketplace-orders/marketplace-price-resolver.service';
+import { MarketplaceOrderService } from '../marketplace-orders/marketplace-order.service';
 import type { AddMarketplaceCartItemDto } from './dto/add-marketplace-cart-item.dto';
 
 interface CartRow {
   id: string;
+  pending_order_id?: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -43,11 +46,18 @@ interface CartItemResult extends CartItemRow {
   attributes: CartVariantAttributeRow[];
 }
 
+interface CheckoutCartItemRow {
+  productId: string;
+  variantId: string | null;
+  quantity: number;
+}
+
 @Injectable()
 export class MarketplaceCartService {
   constructor(
     private readonly database: DatabaseService,
     private readonly prices: MarketplacePriceResolver,
+    private readonly orders: MarketplaceOrderService,
   ) {}
 
   async getCart(userId: string) {
@@ -65,10 +75,11 @@ export class MarketplaceCartService {
          VALUES ($1)
          ON CONFLICT (user_id)
          DO UPDATE SET updated_at = marketplace_carts.updated_at
-         RETURNING id, created_at, updated_at`,
+         RETURNING id, pending_order_id, created_at, updated_at`,
         [userId],
       );
       const cart = cartResult.rows[0];
+      this.assertCartEditable(cart);
       const sellerId = await this.getProductSeller(
         client,
         dto.productId,
@@ -124,14 +135,21 @@ export class MarketplaceCartService {
   ) {
     this.validateQuantity(quantity);
     return this.database.withTransaction(async (client) => {
-      const cartResult = await client.query<{ id: string }>(
-        'SELECT id FROM marketplace_carts WHERE user_id = $1 FOR UPDATE',
+      const cartResult = await client.query<{
+        id: string;
+        pending_order_id: string | null;
+      }>(
+        `SELECT id, pending_order_id
+         FROM marketplace_carts
+         WHERE user_id = $1
+         FOR UPDATE`,
         [userId],
       );
       const cart = cartResult.rows[0];
       if (!cart) {
         throw new NotFoundException('Marketplace cart item not found');
       }
+      this.assertCartEditable(cart);
       const item = await this.getOwnedItem(client, userId, itemId, true);
       await this.resolvePrice(
         client,
@@ -157,14 +175,21 @@ export class MarketplaceCartService {
 
   async removeItem(userId: string, itemId: string) {
     return this.database.withTransaction(async (client) => {
-      const cartResult = await client.query<{ id: string }>(
-        'SELECT id FROM marketplace_carts WHERE user_id = $1 FOR UPDATE',
+      const cartResult = await client.query<{
+        id: string;
+        pending_order_id: string | null;
+      }>(
+        `SELECT id, pending_order_id
+         FROM marketplace_carts
+         WHERE user_id = $1
+         FOR UPDATE`,
         [userId],
       );
       const cart = cartResult.rows[0];
       if (!cart) {
         throw new NotFoundException('Marketplace cart item not found');
       }
+      this.assertCartEditable(cart);
       const result = await client.query<{ id: string; cart_id: string }>(
         `DELETE FROM marketplace_cart_items item
          WHERE item.cart_id = $1
@@ -188,12 +213,19 @@ export class MarketplaceCartService {
 
   async clearCart(userId: string) {
     return this.database.withTransaction(async (client) => {
-      const result = await client.query<{ id: string }>(
-        'SELECT id FROM marketplace_carts WHERE user_id = $1 FOR UPDATE',
+      const result = await client.query<{
+        id: string;
+        pending_order_id: string | null;
+      }>(
+        `SELECT id, pending_order_id
+         FROM marketplace_carts
+         WHERE user_id = $1
+         FOR UPDATE`,
         [userId],
       );
       const cart = result.rows[0];
       if (cart) {
+        this.assertCartEditable(cart);
         await client.query(
           'DELETE FROM marketplace_cart_items WHERE cart_id = $1',
           [cart.id],
@@ -205,6 +237,78 @@ export class MarketplaceCartService {
       }
       return { cleared: true };
     });
+  }
+
+  async checkout(userId: string) {
+    return this.database.withTransaction(async (client) => {
+      const cartResult = await client.query<{
+        id: string;
+        pending_order_id: string | null;
+      }>(
+        `SELECT id, pending_order_id
+         FROM marketplace_carts
+         WHERE user_id = $1
+         FOR UPDATE`,
+        [userId],
+      );
+      const cart = cartResult.rows[0];
+      if (!cart) {
+        throw new BadRequestException('Cannot checkout an empty cart');
+      }
+      if (cart.pending_order_id) {
+        const order = await this.orders.getPendingPaymentOrder(
+          client,
+          userId,
+          cart.pending_order_id,
+        );
+        return { ...order, payment: { status: 'NOT_INITIATED' as const } };
+      }
+
+      const itemsResult = await client.query<CheckoutCartItemRow>(
+        `SELECT product_id AS "productId",
+                variant_id AS "variantId",
+                quantity
+         FROM marketplace_cart_items
+         WHERE cart_id = $1
+         ORDER BY product_id, variant_id NULLS FIRST
+         FOR UPDATE`,
+        [cart.id],
+      );
+      if (!itemsResult.rows.length) {
+        throw new BadRequestException('Cannot checkout an empty cart');
+      }
+
+      const order = await this.orders.createPendingPaymentOrder(
+        client,
+        userId,
+        itemsResult.rows.map((item) => ({
+          productId: item.productId,
+          variantId: item.variantId ?? undefined,
+          quantity: item.quantity,
+        })),
+      );
+      const linked = await client.query<{ id: string }>(
+        `UPDATE marketplace_carts
+         SET pending_order_id = $1, updated_at = now()
+         WHERE id = $2 AND user_id = $3 AND pending_order_id IS NULL
+         RETURNING id`,
+        [order.id, cart.id, userId],
+      );
+      if (!linked.rows[0]) {
+        throw new ConflictException(
+          'The cart already has a pending marketplace order',
+        );
+      }
+      return { ...order, payment: { status: 'NOT_INITIATED' as const } };
+    });
+  }
+
+  private assertCartEditable(cart: { pending_order_id?: string | null }): void {
+    if (cart.pending_order_id) {
+      throw new ConflictException(
+        'The cart cannot be changed while an order is awaiting payment',
+      );
+    }
   }
 
   private async getCartInTransaction(client: PoolClient, userId: string) {

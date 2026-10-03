@@ -61,7 +61,8 @@ const migrations = [
   '0028_marketplace_inventory.sql',
   '0029_marketplace_orders.sql',
   '0030_marketplace_simple_product_pricing.sql',
-  '0031_marketplace_carts.sql'
+  '0031_marketplace_carts.sql',
+  '0032_marketplace_checkout_reservations.sql'
 ];
 
 const migrationsDirectory = resolve(repoRoot, 'database/migrations');

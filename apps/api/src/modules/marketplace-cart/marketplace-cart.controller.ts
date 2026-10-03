@@ -28,6 +28,11 @@ export class MarketplaceCartController {
     return this.carts.getCart(user.id);
   }
 
+  @Post('checkout')
+  checkout(@CurrentUser() user: AuthenticatedUser) {
+    return this.carts.checkout(user.id);
+  }
+
   @Post('items')
   addItem(
     @CurrentUser() user: AuthenticatedUser,
