@@ -1,7 +1,9 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { validate } from 'class-validator';
 import type {
@@ -9,6 +11,7 @@ import type {
   InitializePaymentResponse,
 } from '../src/modules/providers/interfaces/payment-provider.interface';
 import { PaymentService } from '../src/modules/payments/payment.service';
+import { PaymentController } from '../src/modules/payments/payment.controller';
 import { CreateMembershipPaymentDto } from '../src/modules/payments/dto/create-membership-payment.dto';
 
 type QueryCall = [query: string, values?: unknown[]];
@@ -38,6 +41,7 @@ describe('PaymentService membership payments', () => {
   };
   const providers = {
     getProvider: jest.fn().mockResolvedValue(provider),
+    getProviderRegistration: jest.fn(),
   };
   const config = { get: jest.fn() };
   const walletService = { creditWithClient: jest.fn() };
@@ -69,6 +73,288 @@ describe('PaymentService membership payments', () => {
     });
     client.query.mockResolvedValue({ rows: [] });
     db.query.mockResolvedValue({ rows: [] });
+    providers.getProviderRegistration.mockResolvedValue({
+      provider,
+      providerId: 'provider-id',
+      providerConfigurationId: 'provider-configuration-id',
+      adapterKey: provider.name,
+      serviceId: 'ecommerce-service-id',
+      priority: 10,
+      isPrimary: true,
+      isBackup: false,
+      configuration: { id: 'provider-configuration-id' },
+      providerRecord: { id: 'provider-id' },
+    });
+  });
+
+  it('creates a marketplace payment from the owned pending order and pins the configured provider', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ id: 'payment-id' }] });
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'marketplace-order-id',
+          customer_id: 'user-id',
+          status: 'PENDING_PAYMENT',
+          total_minor: '2750',
+          currency: 'NGN',
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'marketplace-order-id',
+          customer_id: 'user-id',
+          status: 'PENDING_PAYMENT',
+          total_minor: '2750',
+          currency: 'NGN',
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{
+          payment_id: 'payment-id',
+          payment_reference: 'PAY-reference',
+          payment_user_id: 'user-id',
+          payment_amount_minor: '2750',
+          payment_currency: 'NGN',
+          payment_state: 'PENDING',
+          payment_purpose: 'MARKETPLACE_ORDER',
+          payment_provider_configuration_id: 'provider-configuration-id',
+          payment_provider_name: null,
+          payment_provider_reference: null,
+          payment_provider_status: 'INITIALIZING',
+          payment_provider_checkout_url: null,
+        }],
+      });
+
+    const result = await service.createMarketplacePaymentIntent(
+      'user-id',
+      'user@example.test',
+      { orderId: 'marketplace-order-id' },
+    );
+
+    expect(providers.getProviderRegistration).toHaveBeenCalledWith('ECOMMERCE');
+    expect(provider.initializePayment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amountMinor: 2750,
+        currency: 'NGN',
+        metadata: expect.objectContaining({
+          marketplaceOrderId: 'marketplace-order-id',
+          paymentPurpose: 'MARKETPLACE_ORDER',
+        }),
+      }),
+    );
+    const insert = (client.query.mock.calls as QueryCall[]).find(([query]) =>
+      String(query).includes('INSERT INTO payments'),
+    );
+    expect(insert?.[0]).toContain('marketplace_order_id');
+    expect(insert?.[0]).toContain('provider_configuration_id');
+    expect(insert?.[0]).not.toMatch(/\border_id\b/);
+    expect(insert?.[0]).toContain("'MARKETPLACE_ORDER'");
+    expect(insert?.[1]).toEqual(
+      expect.arrayContaining([
+        'user-id',
+        '2750',
+        'NGN',
+        'marketplace-order-marketplace-order-id',
+        'marketplace-order-id',
+        'provider-configuration-id',
+      ]),
+    );
+    expect(result.payment).toMatchObject({
+      purpose: 'MARKETPLACE_ORDER',
+      amountMinor: 2750,
+      currency: 'NGN',
+      state: 'PENDING',
+    });
+    expect(result.checkout).toEqual({
+      url: 'https://provider.invalid/checkout',
+    });
+  });
+
+  it('does not reveal or pay an order belonging to another customer', async () => {
+    client.query.mockResolvedValueOnce({ rows: [] });
+
+    await expect(
+      service.createMarketplacePaymentIntent(
+        'different-user',
+        'user@example.test',
+        { orderId: 'marketplace-order-id' },
+      ),
+    ).rejects.toThrow(NotFoundException);
+
+    expect(providers.getProviderRegistration).not.toHaveBeenCalled();
+    expect(provider.initializePayment).not.toHaveBeenCalled();
+  });
+
+  it('rejects marketplace orders not awaiting payment', async () => {
+    client.query.mockResolvedValueOnce({
+      rows: [{
+        id: 'marketplace-order-id',
+        customer_id: 'user-id',
+        status: 'CANCELLED',
+        total_minor: '2750',
+        currency: 'NGN',
+      }],
+    });
+
+    await expect(
+      service.createMarketplacePaymentIntent(
+        'user-id',
+        'user@example.test',
+        { orderId: 'marketplace-order-id' },
+      ),
+    ).rejects.toThrow(ConflictException);
+
+    expect(providers.getProviderRegistration).not.toHaveBeenCalled();
+  });
+
+  it('rejects zero-total orders without creating a payment', async () => {
+    client.query.mockResolvedValueOnce({
+      rows: [{
+        id: 'marketplace-order-id',
+        customer_id: 'user-id',
+        status: 'PENDING_PAYMENT',
+        total_minor: '0',
+        currency: 'NGN',
+      }],
+    });
+
+    await expect(
+      service.createMarketplacePaymentIntent(
+        'user-id',
+        'user@example.test',
+        { orderId: 'marketplace-order-id' },
+      ),
+    ).rejects.toThrow(BadRequestException);
+
+    expect(providers.getProviderRegistration).not.toHaveBeenCalled();
+  });
+
+  it('reuses a pending marketplace payment without routing or initializing another provider request', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'marketplace-order-id',
+          customer_id: 'user-id',
+          status: 'PENDING_PAYMENT',
+          total_minor: '2750',
+          currency: 'NGN',
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          payment_id: 'payment-id',
+          payment_reference: 'PAY-reference',
+          payment_user_id: 'user-id',
+          payment_amount_minor: '2750',
+          payment_currency: 'NGN',
+          payment_state: 'PENDING',
+          payment_purpose: 'MARKETPLACE_ORDER',
+          payment_provider_configuration_id: 'provider-configuration-id',
+          payment_provider_name: provider.name,
+          payment_provider_reference: 'provider-reference',
+          payment_provider_status: 'PENDING',
+          payment_provider_checkout_url: 'https://provider.invalid/checkout',
+        }],
+      });
+
+    const result = await service.createMarketplacePaymentIntent(
+      'user-id',
+      'user@example.test',
+      { orderId: 'marketplace-order-id' },
+    );
+
+    expect(result.payment.reference).toBe('PAY-reference');
+    expect(providers.getProviderRegistration).not.toHaveBeenCalled();
+    expect(provider.initializePayment).not.toHaveBeenCalled();
+  });
+
+  it('does not replace an existing payment that is initializing or terminal', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'marketplace-order-id',
+          customer_id: 'user-id',
+          status: 'PENDING_PAYMENT',
+          total_minor: '2750',
+          currency: 'NGN',
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          payment_id: 'payment-id',
+          payment_reference: 'PAY-reference',
+          payment_user_id: 'user-id',
+          payment_amount_minor: '2750',
+          payment_currency: 'NGN',
+          payment_state: 'PENDING',
+          payment_purpose: 'MARKETPLACE_ORDER',
+          payment_provider_configuration_id: 'provider-configuration-id',
+          payment_provider_name: null,
+          payment_provider_reference: null,
+          payment_provider_status: 'INITIALIZING',
+          payment_provider_checkout_url: null,
+        }],
+      });
+
+    await expect(
+      service.createMarketplacePaymentIntent(
+        'user-id',
+        'user@example.test',
+        { orderId: 'marketplace-order-id' },
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(providers.getProviderRegistration).not.toHaveBeenCalled();
+  });
+
+  it('fails safely when configured ECOMMERCE routing is unavailable', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'marketplace-order-id',
+          customer_id: 'user-id',
+          status: 'PENDING_PAYMENT',
+          total_minor: '2750',
+          currency: 'NGN',
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+    providers.getProviderRegistration.mockRejectedValueOnce(
+      new ServiceUnavailableException(),
+    );
+
+    await expect(
+      service.createMarketplacePaymentIntent(
+        'user-id',
+        'user@example.test',
+        { orderId: 'marketplace-order-id' },
+      ),
+    ).rejects.toThrow(ServiceUnavailableException);
+
+    expect(client.query).toHaveBeenCalledTimes(2);
+    expect(provider.initializePayment).not.toHaveBeenCalled();
+  });
+
+  it('passes the authenticated customer and only the route order ID to the service', async () => {
+    const createMarketplacePaymentIntent = jest.fn();
+    const controller = new PaymentController({
+      createMarketplacePaymentIntent,
+    } as never);
+    const user = {
+      id: 'authenticated-customer-id',
+      email: 'customer@example.test',
+      phone: null,
+      roles: [],
+    };
+
+    controller.createMarketplacePayment(user, 'marketplace-order-id');
+
+    expect(createMarketplacePaymentIntent).toHaveBeenCalledWith(
+      user.id,
+      user.email,
+      { orderId: 'marketplace-order-id' },
+    );
   });
 
   it('keeps wallet funding deposit-backed without supplying a membership program', async () => {
@@ -453,7 +739,10 @@ describe('PaymentService membership payments', () => {
 
   const webhookPayment = (
     state = 'PENDING',
-    purpose: 'WALLET_FUNDING' | 'BUSINESS_MEMBERSHIP' = 'BUSINESS_MEMBERSHIP',
+    purpose:
+      | 'WALLET_FUNDING'
+      | 'BUSINESS_MEMBERSHIP'
+      | 'MARKETPLACE_ORDER' = 'BUSINESS_MEMBERSHIP',
   ) => ({
     payment_id: 'payment-id',
     payment_reference: 'PAY-membership',
@@ -573,6 +862,21 @@ describe('PaymentService membership payments', () => {
     expect((client.query.mock.calls as QueryCall[]).some(([query]) =>
       String(query).includes('business_membership_entitlements'),
     )).toBe(false);
+    expect(walletService.creditWithClient).not.toHaveBeenCalled();
+  });
+
+  it('does not settle marketplace payments through the existing webhook path', async () => {
+    configureWebhook('SUCCESS');
+    client.query.mockResolvedValueOnce({
+      rows: [webhookPayment('PENDING', 'MARKETPLACE_ORDER')],
+    });
+
+    await expect(
+      service.completeFromWebhook({ eventId: 'event-id' }),
+    ).rejects.toThrow(ServiceUnavailableException);
+
+    expect(client.query).toHaveBeenCalledTimes(1);
+    expect(db.query).not.toHaveBeenCalled();
     expect(walletService.creditWithClient).not.toHaveBeenCalled();
   });
 

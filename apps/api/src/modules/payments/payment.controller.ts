@@ -1,8 +1,19 @@
-import { Body, Controller, Headers, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Headers,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { Public } from '../../common/auth/auth.decorators';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
+import { FeatureGuard } from '../../common/features/feature.guard';
+import { RequiresFeature } from '../../common/features/feature.decorator';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { CreateMembershipPaymentDto } from './dto/create-membership-payment.dto';
+import { CreateMarketplacePaymentDto } from './dto/create-marketplace-payment.dto';
 import { FundWalletDto } from './dto/fund-wallet.dto';
 import { PaymentService } from './payment.service';
 
@@ -27,6 +38,20 @@ export class PaymentController {
       user.id,
       user.email,
       dto,
+    );
+  }
+
+  @UseGuards(FeatureGuard)
+  @RequiresFeature('MARKETPLACE_ENABLED')
+  @Post('marketplace-orders/:orderId')
+  createMarketplacePayment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId', new ParseUUIDPipe()) orderId: string,
+  ) {
+    return this.payments.createMarketplacePaymentIntent(
+      user.id,
+      user.email,
+      { orderId },
     );
   }
 

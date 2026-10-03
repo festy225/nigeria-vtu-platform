@@ -9,6 +9,7 @@ import type {
   CreateMembershipPaymentDto,
   MembershipBillingPeriod,
 } from './dto/create-membership-payment.dto';
+import type { CreateMarketplacePaymentDto } from './dto/create-marketplace-payment.dto';
 import type { FundWalletDto } from './dto/fund-wallet.dto';
 import { WalletService } from '../wallets/wallet.service';
 
@@ -78,6 +79,29 @@ interface PaymentSettlementRow {
   payment_provider_name: string | null;
   payment_provider_reference: string | null;
   deposit_id: string | null;
+}
+
+interface MarketplaceOrderPaymentSource {
+  id: string;
+  customer_id: string;
+  status: string;
+  total_minor: string;
+  currency: CurrencyCode;
+}
+
+interface MarketplacePaymentRow {
+  payment_id: string;
+  payment_reference: string;
+  payment_user_id: string;
+  payment_amount_minor: string;
+  payment_currency: CurrencyCode;
+  payment_state: string;
+  payment_purpose: PaymentPurpose;
+  payment_provider_configuration_id: string | null;
+  payment_provider_name: string | null;
+  payment_provider_reference: string | null;
+  payment_provider_status: string | null;
+  payment_provider_checkout_url: string | null;
 }
 
 interface MembershipValidityRow {
@@ -453,6 +477,189 @@ if (response.status !== 'PENDING') {
     }
   }
 
+  async createMarketplacePaymentIntent(
+    userId: string,
+    customerEmail: string | null,
+    request: CreateMarketplacePaymentDto,
+  ) {
+    if (!customerEmail?.trim()) {
+      throw new BadRequestException(
+        'An email address is required to initialize payment',
+      );
+    }
+
+    const preflight = await this.db.withTransaction(async (client) => {
+      const order = await this.lockMarketplaceOrder(
+        client,
+        userId,
+        request.orderId,
+      );
+      this.validateMarketplaceOrderForPayment(order);
+
+      const existing = await this.findMarketplacePaymentForOrder(
+        client,
+        order.id,
+      );
+      return { order, existing };
+    });
+
+    if (preflight.existing) {
+      return this.toReusableMarketplacePayment(preflight.existing);
+    }
+
+    const providerRegistration =
+      await this.providers.getProviderRegistration('ECOMMERCE');
+    const initialization = await this.db.withTransaction(async (client) => {
+      const order = await this.lockMarketplaceOrder(
+        client,
+        userId,
+        request.orderId,
+      );
+      this.validateMarketplaceOrderForPayment(order);
+
+      const existing = await this.findMarketplacePaymentForOrder(
+        client,
+        order.id,
+      );
+      if (existing) {
+        return { row: existing, created: false };
+      }
+
+      const paymentReference = `PAY-${randomUUID()}`;
+      const result = await client.query<MarketplacePaymentRow>(
+        `INSERT INTO payments (
+           reference,
+           user_id,
+           amount_minor,
+           currency,
+           state,
+           idempotency_key,
+           provider_status,
+           purpose,
+           marketplace_order_id,
+           provider_configuration_id
+         )
+         VALUES (
+           $1, $2, $3, $4, 'PENDING', $5, 'INITIALIZING',
+           'MARKETPLACE_ORDER', $6, $7
+         )
+         RETURNING
+           id payment_id,
+           reference payment_reference,
+           user_id payment_user_id,
+           amount_minor payment_amount_minor,
+           currency payment_currency,
+           state payment_state,
+           purpose payment_purpose,
+           provider_configuration_id payment_provider_configuration_id,
+           provider_name payment_provider_name,
+           provider_reference payment_provider_reference,
+           provider_status payment_provider_status,
+           provider_checkout_url payment_provider_checkout_url`,
+        [
+          paymentReference,
+          userId,
+          order.total_minor,
+          order.currency,
+          `marketplace-order-${order.id}`,
+          order.id,
+          providerRegistration.providerConfigurationId,
+        ],
+      );
+
+      const row = result.rows[0];
+      if (!row) {
+        throw new ConflictException(
+          'Unable to create marketplace payment for this order',
+        );
+      }
+      return { row, created: true };
+    });
+
+    if (!initialization.created) {
+      return this.toReusableMarketplacePayment(initialization.row);
+    }
+
+    const row = initialization.row;
+    const provider = providerRegistration.provider;
+    try {
+      const response = await provider.initializePayment({
+        paymentReference: row.payment_reference,
+        amountMinor: Number(row.payment_amount_minor),
+        currency: row.payment_currency,
+        customerEmail: customerEmail.trim(),
+        callbackUrl: this.callbackUrl(),
+        metadata: {
+          paymentReference: row.payment_reference,
+          marketplaceOrderId: request.orderId,
+          paymentPurpose: 'MARKETPLACE_ORDER',
+        },
+      });
+
+      if (response.status !== 'PENDING') {
+        throw new BadGatewayException(
+          `Payment provider returned unexpected initialization status: ${response.status}`,
+        );
+      }
+
+      const updated = await this.db.query(
+        `UPDATE payments
+         SET provider_name = $1,
+             provider_reference = $2,
+             provider_status = $3,
+             provider_checkout_url = $4,
+             provider_metadata = $5
+         WHERE id = $6
+           AND state = 'PENDING'
+           AND purpose = 'MARKETPLACE_ORDER'
+           AND provider_configuration_id = $7
+           AND provider_status = 'INITIALIZING'
+         RETURNING id`,
+        [
+          response.providerName,
+          response.providerReference,
+          response.status,
+          response.checkoutUrl,
+          JSON.stringify({ status: response.status }),
+          row.payment_id,
+          providerRegistration.providerConfigurationId,
+        ],
+      );
+      if (!updated.rows[0]) {
+        throw new ConflictException(
+          'Marketplace payment initialization is no longer pending',
+        );
+      }
+
+      return this.toMarketplacePaymentIntent({
+        ...row,
+        payment_provider_name: response.providerName,
+        payment_provider_reference: response.providerReference,
+        payment_provider_status: response.status,
+        payment_provider_checkout_url: response.checkoutUrl,
+      });
+    } catch (error) {
+      await this.db.query(
+        `UPDATE payments
+         SET provider_name = COALESCE(provider_name, $1),
+             provider_status = 'FAILED'
+         WHERE id = $2
+           AND state = 'PENDING'
+           AND purpose = 'MARKETPLACE_ORDER'
+           AND provider_status = 'INITIALIZING'`,
+        [provider.name, row.payment_id],
+      );
+      if (
+        error instanceof ServiceUnavailableException ||
+        error instanceof BadGatewayException ||
+        error instanceof ConflictException
+      ) {
+        throw error;
+      }
+      throw new BadGatewayException('Payment provider initialization failed');
+    }
+  }
+
   async completeFromWebhook(
     rawPayload: unknown,
     headers: Record<string, string | string[] | undefined> = {},
@@ -500,6 +707,12 @@ if (response.status !== 'PENDING') {
 
       if (!payment) {
         throw new NotFoundException('Payment not found');
+      }
+
+      if (payment.payment_purpose === 'MARKETPLACE_ORDER') {
+        throw new ServiceUnavailableException(
+          'Marketplace payment settlement is not available',
+        );
       }
 
       if (
@@ -718,6 +931,115 @@ if (response.status !== 'PENDING') {
         unit,
       ],
     );
+  }
+
+  private async lockMarketplaceOrder(
+    client: PoolClient,
+    userId: string,
+    orderId: string,
+  ): Promise<MarketplaceOrderPaymentSource> {
+    const result = await client.query<MarketplaceOrderPaymentSource>(
+      `SELECT id, customer_id, status, total_minor, currency
+       FROM marketplace_orders
+       WHERE id = $1 AND customer_id = $2
+       FOR UPDATE`,
+      [orderId, userId],
+    );
+    const order = result.rows[0];
+    if (!order) {
+      throw new NotFoundException('Marketplace order not found');
+    }
+    return order;
+  }
+
+  private validateMarketplaceOrderForPayment(
+    order: MarketplaceOrderPaymentSource,
+  ) {
+    if (order.status !== 'PENDING_PAYMENT') {
+      throw new ConflictException(
+        'Marketplace order is not awaiting payment',
+      );
+    }
+
+    const amountMinor = Number(order.total_minor);
+    if (!Number.isSafeInteger(amountMinor) || amountMinor < 0) {
+      throw new BadRequestException(
+        'Marketplace order total is not a valid payment amount',
+      );
+    }
+    if (amountMinor === 0) {
+      throw new BadRequestException(
+        'Zero-total marketplace orders cannot be paid until a payment policy is defined',
+      );
+    }
+  }
+
+  private async findMarketplacePaymentForOrder(
+    client: PoolClient,
+    orderId: string,
+  ): Promise<MarketplacePaymentRow | undefined> {
+    const result = await client.query<MarketplacePaymentRow>(
+      `SELECT
+         id payment_id,
+         reference payment_reference,
+         user_id payment_user_id,
+         amount_minor payment_amount_minor,
+         currency payment_currency,
+         state payment_state,
+         purpose payment_purpose,
+         provider_configuration_id payment_provider_configuration_id,
+         provider_name payment_provider_name,
+         provider_reference payment_provider_reference,
+         provider_status payment_provider_status,
+         provider_checkout_url payment_provider_checkout_url
+       FROM payments
+       WHERE marketplace_order_id = $1
+       FOR UPDATE`,
+      [orderId],
+    );
+    return result.rows[0];
+  }
+
+  private toReusableMarketplacePayment(row: MarketplacePaymentRow) {
+    if (
+      row.payment_purpose !== 'MARKETPLACE_ORDER' ||
+      row.payment_state !== 'PENDING' ||
+      row.payment_provider_status !== 'PENDING' ||
+      !row.payment_provider_configuration_id ||
+      !row.payment_provider_name ||
+      !row.payment_provider_reference ||
+      !row.payment_provider_checkout_url
+    ) {
+      throw new ConflictException(
+        'A marketplace payment already exists and cannot be safely reused',
+      );
+    }
+
+    return this.toMarketplacePaymentIntent(row);
+  }
+
+  private toMarketplacePaymentIntent(row: MarketplacePaymentRow) {
+    return {
+      payment: {
+        id: row.payment_id,
+        reference: row.payment_reference,
+        userId: row.payment_user_id,
+        purpose: row.payment_purpose,
+        amountMinor: Number(row.payment_amount_minor),
+        currency: row.payment_currency,
+        state: row.payment_state,
+      },
+      provider: row.payment_provider_name && row.payment_provider_reference
+        ? {
+          name: row.payment_provider_name,
+          reference: row.payment_provider_reference,
+          status: row.payment_provider_status ?? 'PENDING',
+        }
+        : undefined,
+      checkout: row.payment_provider_checkout_url
+        ? { url: row.payment_provider_checkout_url }
+        : undefined,
+    };
   }
 
   private async findMembershipPaymentByIdempotencyKey(
