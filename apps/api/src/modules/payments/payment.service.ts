@@ -12,6 +12,11 @@ import type {
 import type { FundWalletDto } from './dto/fund-wallet.dto';
 import { WalletService } from '../wallets/wallet.service';
 
+type PaymentPurpose =
+  | 'WALLET_FUNDING'
+  | 'BUSINESS_MEMBERSHIP'
+  | 'MARKETPLACE_ORDER';
+
 interface FundingIntentRow {
   payment_id: string;
   payment_reference: string;
@@ -51,7 +56,7 @@ interface MembershipPaymentRow {
   payment_amount_minor: string;
   payment_currency: CurrencyCode;
   payment_state: string;
-  payment_purpose: 'WALLET_FUNDING' | 'BUSINESS_MEMBERSHIP';
+  payment_purpose: PaymentPurpose;
   membership_program_id: string | null;
   membership_billing_period: MembershipBillingPeriod | null;
   payment_provider_name: string | null;
@@ -68,7 +73,7 @@ interface PaymentSettlementRow {
   payment_amount_minor: string;
   payment_currency: CurrencyCode;
   payment_state: string;
-  payment_purpose: 'WALLET_FUNDING' | 'BUSINESS_MEMBERSHIP';
+  payment_purpose: PaymentPurpose;
   membership_program_id: string | null;
   payment_provider_name: string | null;
   payment_provider_reference: string | null;
