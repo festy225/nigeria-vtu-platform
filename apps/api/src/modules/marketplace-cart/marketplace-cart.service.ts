@@ -239,6 +239,49 @@ export class MarketplaceCartService {
     });
   }
 
+  async finalizePendingOrderCart(
+    client: PoolClient,
+    userId: string,
+    orderId: string,
+  ): Promise<void> {
+    const result = await client.query<{
+      id: string;
+      pending_order_id: string | null;
+    }>(
+      `SELECT id, pending_order_id
+       FROM marketplace_carts
+       WHERE user_id = $1
+       FOR UPDATE`,
+      [userId],
+    );
+    const cart = result.rows[0];
+    if (!cart || !cart.pending_order_id) {
+      return;
+    }
+    if (cart.pending_order_id !== orderId) {
+      throw new ConflictException(
+        'The cart is linked to a different pending marketplace order',
+      );
+    }
+
+    await client.query(
+      'DELETE FROM marketplace_cart_items WHERE cart_id = $1',
+      [cart.id],
+    );
+    const cleared = await client.query<{ id: string }>(
+      `UPDATE marketplace_carts
+       SET pending_order_id = NULL, updated_at = now()
+       WHERE id = $1 AND user_id = $2 AND pending_order_id = $3
+       RETURNING id`,
+      [cart.id, userId, orderId],
+    );
+    if (!cleared.rows[0]) {
+      throw new ConflictException(
+        'The cart is no longer linked to this pending marketplace order',
+      );
+    }
+  }
+
   async checkout(userId: string) {
     return this.database.withTransaction(async (client) => {
       const cartResult = await client.query<{

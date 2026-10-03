@@ -94,6 +94,159 @@ describe('MarketplaceCartService', () => {
     });
   });
 
+  it('deletes items and clears the matching pending order from the owned cart', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'owned-cart-id',
+          pending_order_id: 'settled-order-id',
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 'owned-cart-id' }] });
+
+    await service.finalizePendingOrderCart(
+      client as never,
+      'authenticated-user-id',
+      'settled-order-id',
+    );
+
+    expect(client.query.mock.calls[0]?.[0]).toContain(
+      'WHERE user_id = $1',
+    );
+    expect(client.query.mock.calls[0]?.[0]).toContain('FOR UPDATE');
+    expect(client.query.mock.calls[0]?.[1]).toEqual([
+      'authenticated-user-id',
+    ]);
+    expect(client.query.mock.calls[1]?.[0]).toContain(
+      'DELETE FROM marketplace_cart_items',
+    );
+    expect(client.query.mock.calls[1]?.[1]).toEqual(['owned-cart-id']);
+    expect(client.query.mock.calls[2]?.[0]).toContain(
+      'SET pending_order_id = NULL',
+    );
+    expect(client.query.mock.calls[2]?.[0]).toContain(
+      'pending_order_id = $3',
+    );
+    expect(client.query.mock.calls[2]?.[1]).toEqual([
+      'owned-cart-id',
+      'authenticated-user-id',
+      'settled-order-id',
+    ]);
+    expect(client.query.mock.calls).toHaveLength(3);
+  });
+
+  it('does not delete items again when finalizing an already finalized order', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{ id: 'owned-cart-id', pending_order_id: null }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ id: 'owned-cart-id', pending_order_id: null }],
+      });
+
+    await service.finalizePendingOrderCart(
+      client as never,
+      'authenticated-user-id',
+      'settled-order-id',
+    );
+    await service.finalizePendingOrderCart(
+      client as never,
+      'authenticated-user-id',
+      'settled-order-id',
+    );
+
+    expect(client.query).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a cart linked to a different order without changing it', async () => {
+    client.query.mockResolvedValueOnce({
+      rows: [{
+        id: 'owned-cart-id',
+        pending_order_id: 'different-order-id',
+      }],
+    });
+
+    await expect(
+      service.finalizePendingOrderCart(
+        client as never,
+        'authenticated-user-id',
+        'settled-order-id',
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(client.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not clear unrelated items when the owned cart has no pending order', async () => {
+    client.query.mockResolvedValueOnce({
+      rows: [{ id: 'owned-cart-id', pending_order_id: null }],
+    });
+
+    await service.finalizePendingOrderCart(
+      client as never,
+      'authenticated-user-id',
+      'settled-order-id',
+    );
+
+    expect(client.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('does nothing when the authenticated customer has no cart', async () => {
+    client.query.mockResolvedValueOnce({ rows: [] });
+
+    await service.finalizePendingOrderCart(
+      client as never,
+      'authenticated-user-id',
+      'settled-order-id',
+    );
+
+    expect(client.query.mock.calls[0]?.[1]).toEqual([
+      'authenticated-user-id',
+    ]);
+    expect(client.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates item deletion failure without clearing the pending order link', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'owned-cart-id',
+          pending_order_id: 'settled-order-id',
+        }],
+      })
+      .mockRejectedValueOnce(new Error('cart item deletion failed'));
+
+    await expect(
+      service.finalizePendingOrderCart(
+        client as never,
+        'authenticated-user-id',
+        'settled-order-id',
+      ),
+    ).rejects.toThrow('cart item deletion failed');
+    expect(client.query).toHaveBeenCalledTimes(2);
+  });
+
+  it('propagates cart-link clearing failure so the caller transaction can roll back deletion', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'owned-cart-id',
+          pending_order_id: 'settled-order-id',
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockRejectedValueOnce(new Error('cart link update failed'));
+
+    await expect(
+      service.finalizePendingOrderCart(
+        client as never,
+        'authenticated-user-id',
+        'settled-order-id',
+      ),
+    ).rejects.toThrow('cart link update failed');
+    expect(client.query).toHaveBeenCalledTimes(3);
+  });
+
   const mockSimpleAdd = (existingItems: Array<Record<string, unknown>> = []) => {
     client.query
       .mockResolvedValueOnce({ rows: [cart] })
