@@ -246,6 +246,90 @@ export class MarketplaceOrderService {
     }
   }
 
+  async releaseInventoryReservation(
+    client: PoolClient,
+    orderId: string,
+    orderItemId: string,
+  ): Promise<void> {
+    const reservationResult =
+      await client.query<OrderInventoryReservationRow>(
+        `SELECT id, order_id, order_item_id, inventory_id, quantity, status
+         FROM marketplace_order_inventory_reservations
+         WHERE order_item_id = $1
+         FOR UPDATE`,
+        [orderItemId],
+      );
+    const reservation = reservationResult.rows[0];
+    if (!reservation) {
+      throw new NotFoundException(
+        'Marketplace inventory reservation not found',
+      );
+    }
+    if (
+      reservation.order_id !== orderId ||
+      reservation.order_item_id !== orderItemId
+    ) {
+      throw new ConflictException(
+        'Marketplace inventory reservation does not belong to this order item',
+      );
+    }
+    if (reservation.status === 'RELEASED') {
+      return;
+    }
+    if (reservation.status === 'CONSUMED') {
+      throw new ConflictException(
+        'Consumed marketplace inventory cannot be released',
+      );
+    }
+
+    const inventoryResult = await client.query<InventoryReservationRow>(
+      `SELECT id, on_hand_quantity, reserved_quantity
+       FROM marketplace_product_inventory
+       WHERE id = $1
+       FOR UPDATE`,
+      [reservation.inventory_id],
+    );
+    const inventory = inventoryResult.rows[0];
+    if (!inventory) {
+      throw new NotFoundException(
+        'Marketplace inventory for reservation not found',
+      );
+    }
+    if (inventory.reserved_quantity < reservation.quantity) {
+      throw new ConflictException(
+        'Marketplace reserved inventory cannot satisfy this release',
+      );
+    }
+
+    const releasedQuantity = await client.query<{ id: string }>(
+      `UPDATE marketplace_product_inventory
+       SET reserved_quantity = reserved_quantity - $1,
+           updated_at = now()
+       WHERE id = $2
+         AND reserved_quantity >= $1
+       RETURNING id`,
+      [reservation.quantity, inventory.id],
+    );
+    if (!releasedQuantity.rows[0]) {
+      throw new ConflictException(
+        'Marketplace reserved inventory cannot satisfy this release',
+      );
+    }
+
+    const marked = await client.query<{ id: string }>(
+      `UPDATE marketplace_order_inventory_reservations
+       SET status = 'RELEASED', updated_at = now()
+       WHERE id = $1 AND status = 'RESERVED'
+       RETURNING id`,
+      [reservation.id],
+    );
+    if (!marked.rows[0]) {
+      throw new ConflictException(
+        'Marketplace inventory reservation is no longer available',
+      );
+    }
+  }
+
   private validateItems(items: CreateMarketplaceOrderItem[]): void {
     if (!items.length) {
       throw new BadRequestException('An order requires at least one item');

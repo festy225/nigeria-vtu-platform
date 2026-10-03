@@ -283,6 +283,218 @@ describe('MarketplaceOrderService foundation', () => {
     expect(client.query).toHaveBeenCalledTimes(3);
   });
 
+  it('releases a reserved quantity without changing on-hand inventory', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'reservation-id',
+          order_id: 'order-id',
+          order_item_id: 'order-item-id',
+          inventory_id: 'inventory-id',
+          quantity: 3,
+          status: 'RESERVED',
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'inventory-id',
+          on_hand_quantity: 8,
+          reserved_quantity: 3,
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [{ id: 'inventory-id' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'reservation-id' }] });
+
+    await service.releaseInventoryReservation(
+      client as never,
+      'order-id',
+      'order-item-id',
+    );
+
+    const calls = client.query.mock.calls;
+    expect(calls[0]?.[0]).toContain(
+      'FROM marketplace_order_inventory_reservations',
+    );
+    expect(calls[0]?.[0]).toContain('FOR UPDATE');
+    expect(calls[1]?.[0]).toContain('FROM marketplace_product_inventory');
+    expect(calls[1]?.[0]).toContain('FOR UPDATE');
+    expect(calls[2]?.[0]).toContain(
+      'reserved_quantity = reserved_quantity - $1',
+    );
+    expect(calls[2]?.[0]).not.toContain('on_hand_quantity =');
+    expect(calls[2]?.[0]).toContain('reserved_quantity >= $1');
+    expect(calls[2]?.[1]).toEqual([3, 'inventory-id']);
+    expect(calls[3]?.[0]).toContain("status = 'RELEASED'");
+    expect(calls[3]?.[0]).toContain("status = 'RESERVED'");
+  });
+
+  it('does not change inventory when a reservation is already released', async () => {
+    const releasedReservation = {
+      id: 'reservation-id',
+      order_id: 'order-id',
+      order_item_id: 'order-item-id',
+      inventory_id: 'inventory-id',
+      quantity: 3,
+      status: 'RELEASED',
+    };
+    client.query
+      .mockResolvedValueOnce({ rows: [releasedReservation] })
+      .mockResolvedValueOnce({ rows: [releasedReservation] });
+
+    await service.releaseInventoryReservation(
+      client as never,
+      'order-id',
+      'order-item-id',
+    );
+    await service.releaseInventoryReservation(
+      client as never,
+      'order-id',
+      'order-item-id',
+    );
+
+    expect(client.query).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects releasing a consumed reservation without changing inventory', async () => {
+    client.query.mockResolvedValueOnce({
+      rows: [{
+        id: 'reservation-id',
+        order_id: 'order-id',
+        order_item_id: 'order-item-id',
+        inventory_id: 'inventory-id',
+        quantity: 3,
+        status: 'CONSUMED',
+      }],
+    });
+
+    await expect(
+      service.releaseInventoryReservation(
+        client as never,
+        'order-id',
+        'order-item-id',
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(client.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects releasing a missing reservation', async () => {
+    client.query.mockResolvedValueOnce({ rows: [] });
+
+    await expect(
+      service.releaseInventoryReservation(
+        client as never,
+        'order-id',
+        'missing-order-item-id',
+      ),
+    ).rejects.toThrow(NotFoundException);
+    expect(client.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a reservation belonging to a different order', async () => {
+    client.query.mockResolvedValueOnce({
+      rows: [{
+        id: 'reservation-id',
+        order_id: 'different-order-id',
+        order_item_id: 'order-item-id',
+        inventory_id: 'inventory-id',
+        quantity: 3,
+        status: 'RESERVED',
+      }],
+    });
+
+    await expect(
+      service.releaseInventoryReservation(
+        client as never,
+        'order-id',
+        'order-item-id',
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(client.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a reservation for a different order item', async () => {
+    client.query.mockResolvedValueOnce({
+      rows: [{
+        id: 'reservation-id',
+        order_id: 'order-id',
+        order_item_id: 'different-order-item-id',
+        inventory_id: 'inventory-id',
+        quantity: 3,
+        status: 'RESERVED',
+      }],
+    });
+
+    await expect(
+      service.releaseInventoryReservation(
+        client as never,
+        'order-id',
+        'order-item-id',
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(client.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects release when reserved inventory would become negative', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'reservation-id',
+          order_id: 'order-id',
+          order_item_id: 'order-item-id',
+          inventory_id: 'inventory-id',
+          quantity: 3,
+          status: 'RESERVED',
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'inventory-id',
+          on_hand_quantity: 8,
+          reserved_quantity: 2,
+        }],
+      });
+
+    await expect(
+      service.releaseInventoryReservation(
+        client as never,
+        'order-id',
+        'order-item-id',
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(client.query).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not mark a reservation released when the guarded inventory update fails', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'reservation-id',
+          order_id: 'order-id',
+          order_item_id: 'order-item-id',
+          inventory_id: 'inventory-id',
+          quantity: 3,
+          status: 'RESERVED',
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'inventory-id',
+          on_hand_quantity: 8,
+          reserved_quantity: 3,
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await expect(
+      service.releaseInventoryReservation(
+        client as never,
+        'order-id',
+        'order-item-id',
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(client.query).toHaveBeenCalledTimes(3);
+  });
+
   it('creates a simple-product draft order with customer and seller derived from trusted inputs/database', async () => {
     client.query
       .mockResolvedValueOnce({ rows: [product] })
