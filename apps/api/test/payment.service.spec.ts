@@ -42,6 +42,7 @@ describe('PaymentService membership payments', () => {
   const providers = {
     getProvider: jest.fn().mockResolvedValue(provider),
     getProviderRegistration: jest.fn(),
+    getProviderRegistrationByConfigurationId: jest.fn(),
   };
   const config = { get: jest.fn() };
   const walletService = { creditWithClient: jest.fn() };
@@ -64,6 +65,22 @@ describe('PaymentService membership payments', () => {
       (work: (value: typeof client) => unknown) => work(client),
     );
     providers.getProvider.mockResolvedValue(provider);
+    providers.getProviderRegistrationByConfigurationId.mockResolvedValue({
+      provider,
+      providerId: 'provider-id',
+      providerConfigurationId: 'provider-configuration-id',
+      adapterKey: provider.name,
+      serviceId: null,
+      priority: 10,
+      isPrimary: true,
+      isBackup: false,
+      configuration: {
+        id: 'provider-configuration-id',
+        config: { configuredValue: 'value' },
+        secretRef: 'configured-secret-reference',
+      },
+      providerRecord: { id: 'provider-id' },
+    });
     provider.initializePayment.mockResolvedValue({
       providerName: provider.name,
       providerReference: 'provider-ref',
@@ -751,6 +768,10 @@ describe('PaymentService membership payments', () => {
     payment_currency: 'USD',
     payment_state: state,
     payment_purpose: purpose,
+    provider_configuration_id:
+      purpose === 'MARKETPLACE_ORDER'
+        ? 'provider-configuration-id'
+        : null,
     membership_program_id:
       purpose === 'BUSINESS_MEMBERSHIP' ? validRequest.membershipProgramId : null,
     payment_provider_name: provider.name,
@@ -773,6 +794,11 @@ describe('PaymentService membership payments', () => {
       rawPayload: { eventId: 'event-id' },
     });
   };
+  const webhookPayload = (overrides: Record<string, unknown> = {}) => ({
+    eventId: 'event-id',
+    paymentReference: 'PAY-membership',
+    ...overrides,
+  });
 
   it('creates one ACTIVE entitlement for a verified successful membership payment', async () => {
     configureWebhook('SUCCESS');
@@ -784,7 +810,7 @@ describe('PaymentService membership payments', () => {
       })
       .mockResolvedValueOnce({ rows: [{ id: 'entitlement-id' }] });
 
-    const result = await service.completeFromWebhook({ eventId: 'event-id' });
+    const result = await service.completeFromWebhook(webhookPayload());
 
     expect(result).toMatchObject({ status: 'SUCCESSFUL', alreadyProcessed: false });
     const queryCalls = client.query.mock.calls as QueryCall[];
@@ -819,7 +845,7 @@ describe('PaymentService membership payments', () => {
       })
       .mockResolvedValueOnce({ rows: [{ id: 'entitlement-id' }] });
 
-    await service.completeFromWebhook({ eventId: 'event-id' });
+    await service.completeFromWebhook(webhookPayload());
 
     client.query
       .mockResolvedValueOnce({ rows: [webhookPayment('SUCCESSFUL')] })
@@ -828,7 +854,7 @@ describe('PaymentService membership payments', () => {
       })
       .mockResolvedValueOnce({ rows: [] });
 
-    const result = await service.completeFromWebhook({ eventId: 'event-id' });
+    const result = await service.completeFromWebhook(webhookPayload());
 
     const queryCalls = client.query.mock.calls as QueryCall[];
     const entitlementInserts = queryCalls.filter(([query]) =>
@@ -855,7 +881,7 @@ describe('PaymentService membership payments', () => {
       .mockResolvedValueOnce({ rows: [webhookPayment()] })
       .mockResolvedValueOnce({ rows: [] });
 
-    const result = await service.completeFromWebhook({ eventId: 'event-id' });
+    const result = await service.completeFromWebhook(webhookPayload());
 
     expect(result.status).toBe('FAILED');
     expect(client.query).toHaveBeenCalledTimes(2);
@@ -872,12 +898,76 @@ describe('PaymentService membership payments', () => {
     });
 
     await expect(
-      service.completeFromWebhook({ eventId: 'event-id' }),
+      service.completeFromWebhook(
+        webhookPayload({ providerName: 'attacker-selected-provider' }),
+      ),
     ).rejects.toThrow(ServiceUnavailableException);
 
     expect(client.query).toHaveBeenCalledTimes(1);
+    expect(
+      providers.getProviderRegistrationByConfigurationId,
+    ).toHaveBeenCalledWith('provider-configuration-id');
+    expect(providers.getProvider).not.toHaveBeenCalled();
+    expect(provider.verifyWebhook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerConfiguration: {
+          id: 'provider-configuration-id',
+          config: { configuredValue: 'value' },
+          secretRef: 'configured-secret-reference',
+        },
+      }),
+    );
     expect(db.query).not.toHaveBeenCalled();
     expect(walletService.creditWithClient).not.toHaveBeenCalled();
+  });
+
+  it('rejects a marketplace callback when no provider configuration is pinned', async () => {
+    const payment = webhookPayment('PENDING', 'MARKETPLACE_ORDER');
+    payment.provider_configuration_id = null;
+    client.query.mockResolvedValueOnce({ rows: [payment] });
+
+    await expect(
+      service.completeFromWebhook(webhookPayload()),
+    ).rejects.toThrow(ServiceUnavailableException);
+
+    expect(
+      providers.getProviderRegistrationByConfigurationId,
+    ).not.toHaveBeenCalled();
+    expect(providers.getProvider).not.toHaveBeenCalled();
+    expect(provider.verifyWebhook).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['provider reference', { providerReference: 'other-provider-reference' }],
+    ['amount', { amountMinor: 12001 }],
+    ['currency', { currency: 'NGN' }],
+  ])('rejects pinned marketplace callback with mismatched %s', async (_field, eventOverrides) => {
+    configureWebhook('SUCCESS');
+    provider.parseWebhook.mockReturnValueOnce({
+      providerName: provider.name,
+      eventId: 'event-id',
+      eventType: 'payment.success',
+      paymentReference: 'PAY-membership',
+      providerReference: 'provider-ref',
+      amountMinor: 12000,
+      currency: 'USD',
+      status: 'SUCCESS',
+      metadata: {},
+      rawPayload: {},
+      ...eventOverrides,
+    });
+    client.query.mockResolvedValueOnce({
+      rows: [webhookPayment('PENDING', 'MARKETPLACE_ORDER')],
+    });
+
+    await expect(
+      service.completeFromWebhook(webhookPayload()),
+    ).rejects.toThrow(ConflictException);
+
+    expect(
+      providers.getProviderRegistrationByConfigurationId,
+    ).toHaveBeenCalledWith('provider-configuration-id');
+    expect(client.query).toHaveBeenCalledTimes(1);
   });
 
   it('credits successful wallet funding without creating a membership entitlement', async () => {
@@ -896,7 +986,7 @@ describe('PaymentService membership payments', () => {
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] });
 
-    const result = await service.completeFromWebhook({ eventId: 'event-id' });
+    const result = await service.completeFromWebhook(webhookPayload());
 
     expect(result.status).toBe('SUCCESSFUL');
     expect(walletService.creditWithClient).toHaveBeenCalledTimes(1);
@@ -915,7 +1005,7 @@ describe('PaymentService membership payments', () => {
       })
       .mockResolvedValueOnce({ rows: [] });
 
-    await service.completeFromWebhook({ eventId: 'event-id' });
+    await service.completeFromWebhook(webhookPayload());
 
     const entitlementInsert = (client.query.mock.calls as QueryCall[]).find(
       ([query]) =>
@@ -943,7 +1033,7 @@ describe('PaymentService membership payments', () => {
       })
       .mockResolvedValueOnce({ rows: [] });
 
-    await service.completeFromWebhook({ eventId: 'event-id' });
+    await service.completeFromWebhook(webhookPayload());
 
     const entitlementInsert = (client.query.mock.calls as QueryCall[]).find(
       ([query]) =>
@@ -971,7 +1061,7 @@ describe('PaymentService membership payments', () => {
       });
 
     await expect(
-      service.completeFromWebhook({ eventId: 'event-id' }),
+      service.completeFromWebhook(webhookPayload()),
     ).rejects.toThrow('Membership program validity configuration is invalid');
 
     expect((client.query.mock.calls as QueryCall[]).some(([query]) =>

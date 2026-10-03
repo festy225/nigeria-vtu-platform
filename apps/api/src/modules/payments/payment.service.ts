@@ -76,6 +76,7 @@ interface PaymentSettlementRow {
   payment_state: string;
   payment_purpose: PaymentPurpose;
   membership_program_id: string | null;
+  provider_configuration_id: string | null;
   payment_provider_name: string | null;
   payment_provider_reference: string | null;
   deposit_id: string | null;
@@ -664,24 +665,7 @@ if (response.status !== 'PENDING') {
     rawPayload: unknown,
     headers: Record<string, string | string[] | undefined> = {},
   ) {
-    const provider = await this.providers.getProvider();
-
-    const verification = await provider.verifyWebhook({
-      rawPayload,
-      headers,
-    });
-
-    if (!verification.valid) {
-      throw new BadRequestException('Invalid payment provider webhook');
-    }
-
-    const event = provider.parseWebhook(verification.rawPayload);
-
-    if (!event.paymentReference || !event.providerReference) {
-      throw new BadRequestException(
-        'Payment webhook is missing required references',
-      );
-    }
+    const paymentReference = this.readWebhookPaymentReference(rawPayload);
 
     return this.db.withTransaction(async (client) => {
       const result = await client.query<PaymentSettlementRow>(
@@ -694,13 +678,14 @@ if (response.status !== 'PENDING') {
            state payment_state,
            purpose payment_purpose,
            membership_program_id,
+           provider_configuration_id,
            provider_name payment_provider_name,
            provider_reference payment_provider_reference,
            deposit_id
          FROM payments
          WHERE reference = $1
          FOR UPDATE`,
-        [event.paymentReference],
+        [paymentReference],
       );
 
       const payment = result.rows[0];
@@ -709,9 +694,48 @@ if (response.status !== 'PENDING') {
         throw new NotFoundException('Payment not found');
       }
 
-      if (payment.payment_purpose === 'MARKETPLACE_ORDER') {
+      if (
+        payment.payment_purpose === 'MARKETPLACE_ORDER' &&
+        !payment.provider_configuration_id
+      ) {
         throw new ServiceUnavailableException(
-          'Marketplace payment settlement is not available',
+          'Marketplace payment provider configuration is unavailable',
+        );
+      }
+
+      const providerRegistration = payment.provider_configuration_id
+        ? await this.providers.getProviderRegistrationByConfigurationId(
+            payment.provider_configuration_id,
+          )
+        : undefined;
+      const provider = providerRegistration?.provider ??
+        await this.providers.getProvider();
+      const verification = await provider.verifyWebhook({
+        rawPayload,
+        headers,
+        ...(providerRegistration
+          ? {
+              providerConfiguration: {
+                id: providerRegistration.configuration.id,
+                config: providerRegistration.configuration.config,
+                secretRef: providerRegistration.configuration.secretRef,
+              },
+            }
+          : {}),
+      });
+
+      if (!verification.valid) {
+        throw new BadRequestException('Invalid payment provider webhook');
+      }
+
+      const event = provider.parseWebhook(verification.rawPayload);
+      if (
+        !event.paymentReference ||
+        !event.providerReference ||
+        event.paymentReference !== payment.payment_reference
+      ) {
+        throw new BadRequestException(
+          'Payment webhook references do not match the identified payment',
         );
       }
 
@@ -738,6 +762,12 @@ if (response.status !== 'PENDING') {
         payment.payment_provider_name !== event.providerName
       ) {
         throw new ConflictException('Payment provider does not match');
+      }
+
+      if (payment.payment_purpose === 'MARKETPLACE_ORDER') {
+        throw new ServiceUnavailableException(
+          'Marketplace payment settlement is not available',
+        );
       }
 
       if (payment.payment_state === 'SUCCESSFUL') {
@@ -950,6 +980,21 @@ if (response.status !== 'PENDING') {
       throw new NotFoundException('Marketplace order not found');
     }
     return order;
+  }
+
+  private readWebhookPaymentReference(rawPayload: unknown): string {
+    if (
+      typeof rawPayload !== 'object' ||
+      rawPayload === null ||
+      !('paymentReference' in rawPayload) ||
+      typeof rawPayload.paymentReference !== 'string' ||
+      !rawPayload.paymentReference.trim()
+    ) {
+      throw new BadRequestException(
+        'Payment webhook is missing the payment reference',
+      );
+    }
+    return rawPayload.paymentReference;
   }
 
   private validateMarketplaceOrderForPayment(

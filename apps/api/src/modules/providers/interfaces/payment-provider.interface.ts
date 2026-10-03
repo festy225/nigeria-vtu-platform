@@ -40,6 +40,11 @@ export interface VerifyPaymentResponse {
 export interface VerifyWebhookRequest {
   rawPayload: unknown;
   headers?: Record<string, string | string[] | undefined>;
+  providerConfiguration?: {
+    id: string;
+    config: Record<string, unknown>;
+    secretRef: string;
+  };
 }
 
 export interface VerifyWebhookResponse {
