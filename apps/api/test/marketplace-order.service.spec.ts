@@ -90,6 +90,199 @@ describe('MarketplaceOrderService foundation', () => {
     audit.record.mockResolvedValue(undefined);
   });
 
+  it('consumes a reserved inventory quantity and marks the reservation consumed', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'reservation-id',
+          order_id: 'order-id',
+          order_item_id: 'order-item-id',
+          inventory_id: 'inventory-id',
+          quantity: 3,
+          status: 'RESERVED',
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'inventory-id',
+          on_hand_quantity: 8,
+          reserved_quantity: 3,
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [{ id: 'inventory-id' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'reservation-id' }] });
+
+    await service.consumeInventoryReservation(
+      client as never,
+      'order-id',
+      'order-item-id',
+    );
+
+    const calls = client.query.mock.calls;
+    expect(calls[0]?.[0]).toContain('FROM marketplace_order_inventory_reservations');
+    expect(calls[0]?.[0]).toContain('FOR UPDATE');
+    expect(calls[1]?.[0]).toContain('FROM marketplace_product_inventory');
+    expect(calls[1]?.[0]).toContain('FOR UPDATE');
+    expect(calls[0]?.[1]).toEqual(['order-item-id']);
+    expect(calls[1]?.[1]).toEqual(['inventory-id']);
+    expect(calls[2]?.[0]).toContain(
+      'on_hand_quantity = on_hand_quantity - $1',
+    );
+    expect(calls[2]?.[0]).toContain(
+      'reserved_quantity = reserved_quantity - $1',
+    );
+    expect(calls[2]?.[0]).toContain('on_hand_quantity >= $1');
+    expect(calls[2]?.[0]).toContain('reserved_quantity >= $1');
+    expect(calls[2]?.[1]).toEqual([3, 'inventory-id']);
+    expect(calls[3]?.[0]).toContain("status = 'CONSUMED'");
+    expect(calls[3]?.[0]).toContain("status = 'RESERVED'");
+  });
+
+  it('does not consume inventory again when the reservation is already consumed', async () => {
+    const consumedReservation = {
+      id: 'reservation-id',
+      order_id: 'order-id',
+      order_item_id: 'order-item-id',
+      inventory_id: 'inventory-id',
+      quantity: 3,
+      status: 'CONSUMED',
+    };
+    client.query
+      .mockResolvedValueOnce({ rows: [consumedReservation] })
+      .mockResolvedValueOnce({ rows: [consumedReservation] });
+
+    await service.consumeInventoryReservation(
+      client as never,
+      'order-id',
+      'order-item-id',
+    );
+    await expect(service.consumeInventoryReservation(
+      client as never,
+      'order-id',
+      'order-item-id',
+    )).resolves.toBeUndefined();
+
+    expect(client.query).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects released reservations without changing inventory', async () => {
+    client.query.mockResolvedValueOnce({
+      rows: [{
+        id: 'reservation-id',
+        order_id: 'order-id',
+        order_item_id: 'order-item-id',
+        inventory_id: 'inventory-id',
+        quantity: 3,
+        status: 'RELEASED',
+      }],
+    });
+
+    await expect(
+      service.consumeInventoryReservation(
+        client as never,
+        'order-id',
+        'order-item-id',
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(client.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a missing reservation', async () => {
+    client.query.mockResolvedValueOnce({ rows: [] });
+
+    await expect(
+      service.consumeInventoryReservation(
+        client as never,
+        'order-id',
+        'missing-order-item-id',
+      ),
+    ).rejects.toThrow(NotFoundException);
+    expect(client.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a reservation belonging to a different order', async () => {
+    client.query.mockResolvedValueOnce({
+      rows: [{
+        id: 'reservation-id',
+        order_id: 'different-order-id',
+        order_item_id: 'order-item-id',
+        inventory_id: 'inventory-id',
+        quantity: 3,
+        status: 'RESERVED',
+      }],
+    });
+
+    await expect(
+      service.consumeInventoryReservation(
+        client as never,
+        'order-id',
+        'order-item-id',
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(client.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects consumption when inventory quantities cannot cover the reservation', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'reservation-id',
+          order_id: 'order-id',
+          order_item_id: 'order-item-id',
+          inventory_id: 'inventory-id',
+          quantity: 3,
+          status: 'RESERVED',
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'inventory-id',
+          on_hand_quantity: 2,
+          reserved_quantity: 2,
+        }],
+      });
+
+    await expect(
+      service.consumeInventoryReservation(
+        client as never,
+        'order-id',
+        'order-item-id',
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(client.query).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not mark a reservation consumed when the guarded inventory update fails', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'reservation-id',
+          order_id: 'order-id',
+          order_item_id: 'order-item-id',
+          inventory_id: 'inventory-id',
+          quantity: 3,
+          status: 'RESERVED',
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'inventory-id',
+          on_hand_quantity: 8,
+          reserved_quantity: 3,
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await expect(
+      service.consumeInventoryReservation(
+        client as never,
+        'order-id',
+        'order-item-id',
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(client.query).toHaveBeenCalledTimes(3);
+  });
+
   it('creates a simple-product draft order with customer and seller derived from trusted inputs/database', async () => {
     client.query
       .mockResolvedValueOnce({ rows: [product] })

@@ -65,6 +65,15 @@ interface InventoryReservationRow {
   reserved_quantity: number;
 }
 
+interface OrderInventoryReservationRow {
+  id: string;
+  order_id: string;
+  order_item_id: string;
+  inventory_id: string;
+  quantity: number;
+  status: 'RESERVED' | 'RELEASED' | 'CONSUMED';
+}
+
 type MarketplaceOrderStatus =
   | 'DRAFT'
   | 'PENDING_PAYMENT'
@@ -149,6 +158,92 @@ export class MarketplaceOrderService {
       [order.id],
     );
     return this.toOrderResult(order, customerId, itemsResult.rows);
+  }
+
+  async consumeInventoryReservation(
+    client: PoolClient,
+    orderId: string,
+    orderItemId: string,
+  ): Promise<void> {
+    const reservationResult =
+      await client.query<OrderInventoryReservationRow>(
+        `SELECT id, order_id, order_item_id, inventory_id, quantity, status
+         FROM marketplace_order_inventory_reservations
+         WHERE order_item_id = $1
+         FOR UPDATE`,
+        [orderItemId],
+      );
+    const reservation = reservationResult.rows[0];
+    if (!reservation) {
+      throw new NotFoundException(
+        'Marketplace inventory reservation not found',
+      );
+    }
+    if (reservation.order_id !== orderId) {
+      throw new ConflictException(
+        'Marketplace inventory reservation does not belong to this order',
+      );
+    }
+    if (reservation.status === 'CONSUMED') {
+      return;
+    }
+    if (reservation.status === 'RELEASED') {
+      throw new ConflictException(
+        'Released marketplace inventory cannot be consumed',
+      );
+    }
+
+    const inventoryResult = await client.query<InventoryReservationRow>(
+      `SELECT id, on_hand_quantity, reserved_quantity
+       FROM marketplace_product_inventory
+       WHERE id = $1
+       FOR UPDATE`,
+      [reservation.inventory_id],
+    );
+    const inventory = inventoryResult.rows[0];
+    if (!inventory) {
+      throw new NotFoundException(
+        'Marketplace inventory for reservation not found',
+      );
+    }
+    if (
+      inventory.reserved_quantity < reservation.quantity ||
+      inventory.on_hand_quantity < reservation.quantity
+    ) {
+      throw new ConflictException(
+        'Marketplace inventory quantities cannot satisfy this reservation',
+      );
+    }
+
+    const consumed = await client.query<{ id: string }>(
+      `UPDATE marketplace_product_inventory
+       SET on_hand_quantity = on_hand_quantity - $1,
+           reserved_quantity = reserved_quantity - $1,
+           updated_at = now()
+       WHERE id = $2
+         AND on_hand_quantity >= $1
+         AND reserved_quantity >= $1
+       RETURNING id`,
+      [reservation.quantity, inventory.id],
+    );
+    if (!consumed.rows[0]) {
+      throw new ConflictException(
+        'Marketplace inventory quantities cannot satisfy this reservation',
+      );
+    }
+
+    const marked = await client.query<{ id: string }>(
+      `UPDATE marketplace_order_inventory_reservations
+       SET status = 'CONSUMED', updated_at = now()
+       WHERE id = $1 AND status = 'RESERVED'
+       RETURNING id`,
+      [reservation.id],
+    );
+    if (!marked.rows[0]) {
+      throw new ConflictException(
+        'Marketplace inventory reservation is no longer available',
+      );
+    }
   }
 
   private validateItems(items: CreateMarketplaceOrderItem[]): void {
