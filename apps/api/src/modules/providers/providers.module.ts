@@ -7,6 +7,10 @@ import { MockAirtimeProviderAdapter } from './adapters/mock-airtime-provider.ada
 import { AirtimeProviderAdapterResolver } from './adapters/airtime-provider-adapter.resolver';
 import { MockPaymentProviderAdapter } from './adapters/mock-payment-provider.adapter';
 import {
+  KYC_PROVIDER_ADAPTERS,
+  KycProviderAdapterResolver,
+} from './adapters/kyc-provider-adapter.resolver';
+import {
   AirtimeProviderRouterService,
   type AirtimeProviderRegistration,
 } from './routing/airtime-provider-router.service';
@@ -29,6 +33,11 @@ export const AIRTIME_PROVIDER_REGISTRATIONS = Symbol(
   providers: [
     ProviderRegistryService,
     MockPaymentProviderAdapter,
+    {
+      provide: KYC_PROVIDER_ADAPTERS,
+      useValue: [],
+    },
+    KycProviderAdapterResolver,
     MockAirtimeProviderAdapter,
     AirtimeProviderAdapterResolver,
 
@@ -60,6 +69,7 @@ export const AIRTIME_PROVIDER_REGISTRATIONS = Symbol(
       provide: AIRTIME_PROVIDER_REGISTRATIONS,
       inject: [
         ProviderRegistryService,
+        KycProviderAdapterResolver,
         AirtimeProviderAdapterResolver,
       ],
       useFactory: async (

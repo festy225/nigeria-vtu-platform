@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { PoolClient } from 'pg';
 import { DatabaseService } from '../../infrastructure/database/database.service';
 
 export interface AuditEvent {
@@ -18,8 +19,11 @@ export interface AuditEvent {
 export class AuditService {
   constructor(private readonly database: DatabaseService) {}
 
-  async record(event: AuditEvent): Promise<void> {
-    await this.database.query(
+  async record(event: AuditEvent, client?: PoolClient): Promise<void> {
+    const query = client
+      ? client.query.bind(client)
+      : this.database.query.bind(this.database);
+    await query(
       `INSERT INTO audit_logs (
         actor_id,
         action,

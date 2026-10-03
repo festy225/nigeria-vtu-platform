@@ -5,6 +5,18 @@ export type ProviderStatus =
   | 'DISABLED'
   | 'UNHEALTHY';
 
+export type ConfigurableServiceCode =
+  | 'AIRTIME'
+  | 'DATA'
+  | 'ELECTRICITY'
+  | 'TV_SUBSCRIPTION'
+  | 'BETTING'
+  | 'AIRTIME_TO_MONEY'
+  | 'VOUCHER'
+  | 'DATA_PRINTING'
+  | 'ECOMMERCE'
+  | 'KYC';
+
 export interface ProviderRecord {
   id: string;
   name: string;

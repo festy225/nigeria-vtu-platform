@@ -14,6 +14,7 @@ import {
   ProviderRecord,
   ProviderRegistrationRecord,
   ProviderStatus,
+  ConfigurableServiceCode,
 } from './provider-registry.types';
 
 interface ProviderRow {
@@ -65,6 +66,16 @@ export class ProviderRegistryService {
     );
 
     return result.rows.map((row) => this.mapProvider(row));
+  }
+
+  async findEnabledServiceId(
+    code: ConfigurableServiceCode,
+  ): Promise<string | null> {
+    const result = await this.database.query<{ id: string }>(
+      `SELECT id FROM services WHERE code = $1 AND enabled = true`,
+      [code],
+    );
+    return result.rows[0]?.id ?? null;
   }
 
   async findProviderById(id: string): Promise<ProviderRecord | null> {

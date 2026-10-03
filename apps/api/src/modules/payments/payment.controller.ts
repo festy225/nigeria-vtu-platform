@@ -2,6 +2,7 @@ import { Body, Controller, Headers, Post } from '@nestjs/common';
 import { Public } from '../../common/auth/auth.decorators';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/auth.types';
+import { CreateMembershipPaymentDto } from './dto/create-membership-payment.dto';
 import { FundWalletDto } from './dto/fund-wallet.dto';
 import { PaymentService } from './payment.service';
 
@@ -15,6 +16,18 @@ export class PaymentController {
     @Body() dto: FundWalletDto,
   ) {
     return this.payments.createFundingIntent(user.id, user.email, dto);
+  }
+
+  @Post('membership')
+  createMembershipPayment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreateMembershipPaymentDto,
+  ) {
+    return this.payments.createMembershipPaymentIntent(
+      user.id,
+      user.email,
+      dto,
+    );
   }
 
   @Public()

@@ -45,7 +45,23 @@ const migrations = [
   '0012_add_provider_adapter_key.sql',
   '0013_provider_configuration_role_uniqueness.sql',
   '0014_marketplace_seller_foundation.sql',
-  '0015_marketplace_seller_foundation_completion.sql'
+  '0015_marketplace_seller_foundation_completion.sql',
+  '0016_business_membership_programs.sql',
+  '0017_payment_purpose_membership_program.sql',
+  '0018_membership_payment_billing_period.sql',
+  '0019_business_membership_entitlements.sql',
+  '0020_business_membership_terms_acceptances.sql',
+  '0021_add_kyc_service_code.sql',
+  '0022_kyc_verifications.sql',
+  '0023_marketplace_product_catalog.sql',
+  '0024_marketplace_product_attributes.sql',
+  '0025_marketplace_product_attribute_assignments.sql',
+  '0026_marketplace_product_variants.sql',
+  '0027_marketplace_variant_pricing.sql',
+  '0028_marketplace_inventory.sql',
+  '0029_marketplace_orders.sql',
+  '0030_marketplace_simple_product_pricing.sql',
+  '0031_marketplace_carts.sql'
 ];
 
 const migrationsDirectory = resolve(repoRoot, 'database/migrations');

@@ -1,3 +1,5 @@
+import type { CurrencyCode } from '@nigeria-vtu-platform/shared';
+
 export const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001/api/v1').replace(/\/$/, '').endsWith('/api/v1')
   ? (process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001/api/v1').replace(/\/$/, '')
   : `${(process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001').replace(/\/$/, '')}/api/v1`;
@@ -91,6 +93,55 @@ export interface SellerApplication {
   reviewed_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface MarketplaceCatalogVariant {
+  id: string;
+  sku: string;
+  priceMinor: number;
+  currency: CurrencyCode;
+  attributeValues: Array<{
+    attributeId: string;
+    attributeCode: string;
+    attributeName: string;
+    valueId: string;
+    valueCode: string;
+    value: string;
+  }>;
+}
+
+export interface MarketplaceProduct {
+  id: string;
+  categoryId: string;
+  categoryName: string;
+  sellerName: string;
+  name: string;
+  description: string;
+  hasVariants: boolean;
+  priceMinor: number | null;
+  currency: CurrencyCode | null;
+}
+
+export interface MarketplaceProductDetail extends MarketplaceProduct {
+  variants: MarketplaceCatalogVariant[];
+}
+
+export interface MarketplaceCart {
+  id: string | null;
+  items: MarketplaceCartItem[];
+}
+
+export interface MarketplaceCartItem {
+  id: string;
+  productId: string;
+  productName: string;
+  variantId: string | null;
+  sku: string | null;
+  variantAttributes: MarketplaceCatalogVariant['attributeValues'];
+  quantity: number;
+  unitPriceMinor: number;
+  lineTotalMinor: number;
+  currency: CurrencyCode;
 }
 type ApiEnvelope<T> = {
   success: boolean;
@@ -256,4 +307,45 @@ passwordResetConfirm: (token: string, password: string) =>
 
   getSellerApplications: () =>
     authenticatedFetch<SellerApplication[]>('/sellers/applications'),
+
+  marketplaceProducts: () =>
+    fetchJson<MarketplaceProduct[]>('/marketplace/products'),
+
+  marketplaceProduct: (productId: string) =>
+    fetchJson<MarketplaceProductDetail>(
+      `/marketplace/products/${encodeURIComponent(productId)}`,
+    ),
+
+  marketplaceCart: () =>
+    authenticatedFetch<MarketplaceCart>('/marketplace/cart'),
+
+  addMarketplaceCartItem: (payload: {
+    productId: string;
+    variantId?: string;
+    quantity: number;
+  }) =>
+    authenticatedFetch<MarketplaceCart>('/marketplace/cart/items', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  updateMarketplaceCartItem: (itemId: string, quantity: number) =>
+    authenticatedFetch<MarketplaceCart>(
+      `/marketplace/cart/items/${encodeURIComponent(itemId)}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ quantity }),
+      },
+    ),
+
+  removeMarketplaceCartItem: (itemId: string) =>
+    authenticatedFetch<{ removed: boolean; itemId: string }>(
+      `/marketplace/cart/items/${encodeURIComponent(itemId)}`,
+      { method: 'DELETE' },
+    ),
+
+  clearMarketplaceCart: () =>
+    authenticatedFetch<{ cleared: boolean }>('/marketplace/cart/items', {
+      method: 'DELETE',
+    }),
 };

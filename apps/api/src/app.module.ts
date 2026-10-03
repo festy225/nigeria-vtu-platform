@@ -13,6 +13,10 @@ import { FeatureCheckModule } from './modules/features/feature-check.module';
 import { PaymentModule } from './modules/payments/payment.module';
 import { AirtimeModule } from './modules/airtime/airtime.module';
 import { SellerModule } from './modules/sellers/seller.module';
+import { MembershipModule } from './modules/membership/membership.module';
+import { KycModule } from './modules/kyc/kyc.module';
+import { MarketplaceOrderModule } from './modules/marketplace-orders/marketplace-order.module';
+import { MarketplaceCartModule } from './modules/marketplace-cart/marketplace-cart.module';
 
 @Global()
 @Module({
@@ -30,7 +34,11 @@ import { SellerModule } from './modules/sellers/seller.module';
     FeatureCheckModule,
     PaymentModule,
     AirtimeModule,
-    SellerModule
+    SellerModule,
+    MembershipModule,
+    KycModule,
+    MarketplaceOrderModule,
+    MarketplaceCartModule,
   ],
   providers: []})
 export class AppModule {}
