@@ -160,6 +160,28 @@ export class MarketplaceOrderService {
     return this.toOrderResult(order, customerId, itemsResult.rows);
   }
 
+  async placePendingPaymentOrder(
+    client: PoolClient,
+    orderId: string,
+  ): Promise<void> {
+    await this.transitionPendingPaymentOrder(
+      client,
+      orderId,
+      'PLACED',
+    );
+  }
+
+  async cancelPendingPaymentOrder(
+    client: PoolClient,
+    orderId: string,
+  ): Promise<void> {
+    await this.transitionPendingPaymentOrder(
+      client,
+      orderId,
+      'CANCELLED',
+    );
+  }
+
   async consumeInventoryReservation(
     client: PoolClient,
     orderId: string,
@@ -336,6 +358,45 @@ export class MarketplaceOrderService {
     }
     for (const item of items) {
       this.validateQuantity(item.quantity);
+    }
+  }
+
+  private async transitionPendingPaymentOrder(
+    client: PoolClient,
+    orderId: string,
+    targetStatus: 'PLACED' | 'CANCELLED',
+  ): Promise<void> {
+    const result = await client.query<{ id: string; status: string }>(
+      `SELECT id, status
+       FROM marketplace_orders
+       WHERE id = $1
+       FOR UPDATE`,
+      [orderId],
+    );
+    const order = result.rows[0];
+    if (!order) {
+      throw new NotFoundException('Marketplace order not found');
+    }
+    if (order.status === targetStatus) {
+      return;
+    }
+    if (order.status !== 'PENDING_PAYMENT') {
+      throw new ConflictException(
+        `Marketplace order in ${order.status} cannot transition to ${targetStatus}`,
+      );
+    }
+
+    const updated = await client.query<{ id: string }>(
+      `UPDATE marketplace_orders
+       SET status = $1, updated_at = now()
+       WHERE id = $2 AND status = 'PENDING_PAYMENT'
+       RETURNING id`,
+      [targetStatus, orderId],
+    );
+    if (!updated.rows[0]) {
+      throw new ConflictException(
+        'Marketplace order is no longer awaiting payment',
+      );
     }
   }
 

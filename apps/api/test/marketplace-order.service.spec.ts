@@ -90,6 +90,119 @@ describe('MarketplaceOrderService foundation', () => {
     audit.record.mockResolvedValue(undefined);
   });
 
+  it('places an order awaiting payment using a locked and guarded transition', async () => {
+    client.query
+      .mockResolvedValueOnce({ rows: [{ id: 'order-id', status: 'PENDING_PAYMENT' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'order-id' }] });
+
+    await service.placePendingPaymentOrder(client as never, 'order-id');
+
+    expect(client.query.mock.calls[0]?.[0]).toContain(
+      'FROM marketplace_orders',
+    );
+    expect(client.query.mock.calls[0]?.[0]).toContain('FOR UPDATE');
+    expect(client.query.mock.calls[1]?.[0]).toContain(
+      "WHERE id = $2 AND status = 'PENDING_PAYMENT'",
+    );
+    expect(client.query.mock.calls[1]?.[1]).toEqual(['PLACED', 'order-id']);
+    expect(
+      client.query.mock.calls.some(([query]) =>
+        String(query).includes('marketplace_order_inventory_reservations'),
+      ),
+    ).toBe(false);
+  });
+
+  it('treats an already placed order as an idempotent no-op', async () => {
+    client.query.mockResolvedValueOnce({
+      rows: [{ id: 'order-id', status: 'PLACED' }],
+    });
+
+    await service.placePendingPaymentOrder(client as never, 'order-id');
+
+    expect(client.query).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['CANCELLED', 'FULFILLED'])(
+    'rejects placing an order in %s state',
+    async (status) => {
+      client.query.mockResolvedValueOnce({
+        rows: [{ id: 'order-id', status }],
+      });
+
+      await expect(
+        service.placePendingPaymentOrder(client as never, 'order-id'),
+      ).rejects.toThrow(ConflictException);
+      expect(client.query).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('rejects placing a missing order', async () => {
+    client.query.mockResolvedValueOnce({ rows: [] });
+
+    await expect(
+      service.placePendingPaymentOrder(client as never, 'missing-order-id'),
+    ).rejects.toThrow(NotFoundException);
+  });
+
+  it('rejects placement if the guarded pending-state update no longer matches', async () => {
+    client.query
+      .mockResolvedValueOnce({ rows: [{ id: 'order-id', status: 'PENDING_PAYMENT' }] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await expect(
+      service.placePendingPaymentOrder(client as never, 'order-id'),
+    ).rejects.toThrow(ConflictException);
+    expect(client.query.mock.calls[1]?.[0]).toContain(
+      "status = 'PENDING_PAYMENT'",
+    );
+  });
+
+  it('cancels an order awaiting payment without changing reservations', async () => {
+    client.query
+      .mockResolvedValueOnce({ rows: [{ id: 'order-id', status: 'PENDING_PAYMENT' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'order-id' }] });
+
+    await service.cancelPendingPaymentOrder(client as never, 'order-id');
+
+    expect(client.query.mock.calls[0]?.[0]).toContain('FOR UPDATE');
+    expect(client.query.mock.calls[1]?.[0]).toContain(
+      "WHERE id = $2 AND status = 'PENDING_PAYMENT'",
+    );
+    expect(client.query.mock.calls[1]?.[1]).toEqual([
+      'CANCELLED',
+      'order-id',
+    ]);
+    expect(
+      client.query.mock.calls.some(([query]) =>
+        String(query).includes('marketplace_order_inventory_reservations'),
+      ),
+    ).toBe(false);
+  });
+
+  it('treats an already cancelled order as an idempotent no-op', async () => {
+    client.query.mockResolvedValueOnce({
+      rows: [{ id: 'order-id', status: 'CANCELLED' }],
+    });
+
+    await service.cancelPendingPaymentOrder(client as never, 'order-id');
+
+    expect(client.query).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['PLACED', 'PROCESSING', 'FULFILLED'])(
+    'rejects cancelling an order in %s state',
+    async (status) => {
+      client.query.mockResolvedValueOnce({
+        rows: [{ id: 'order-id', status }],
+      });
+
+      await expect(
+        service.cancelPendingPaymentOrder(client as never, 'order-id'),
+      ).rejects.toThrow(ConflictException);
+      expect(client.query).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('consumes a reserved inventory quantity and marks the reservation consumed', async () => {
     client.query
       .mockResolvedValueOnce({
