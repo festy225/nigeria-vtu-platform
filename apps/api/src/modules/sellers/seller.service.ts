@@ -718,6 +718,63 @@ export class SellerService {
     return result.rows;
   }
 
+  async listSellerOrders(userId: string) {
+    const sellerId = await this.getSellerIdByUserId(userId);
+
+    const result = await this.database.query<{
+      id: string;
+      order_number: string;
+      status: string;
+      currency: CurrencyCode;
+      subtotal_minor: string | number;
+      total_minor: string | number;
+      item_count: string | number;
+      seller_total_minor: string | number;
+      created_at: Date;
+      updated_at: Date;
+    }>(
+      `SELECT
+         o.id,
+         o.order_number::text,
+         o.status,
+         o.currency,
+         o.subtotal_minor,
+         o.total_minor,
+         COUNT(item.id)::int AS item_count,
+         COALESCE(SUM(item.line_total_minor), 0)::bigint AS seller_total_minor,
+         o.created_at,
+         o.updated_at
+       FROM marketplace_orders o
+       JOIN marketplace_order_items item
+         ON item.order_id = o.id
+        AND item.seller_id = $1
+       GROUP BY
+         o.id,
+         o.order_number,
+         o.status,
+         o.currency,
+         o.subtotal_minor,
+         o.total_minor,
+         o.created_at,
+         o.updated_at
+       ORDER BY o.created_at DESC, o.id DESC`,
+      [sellerId],
+    );
+
+    return result.rows.map((order) => ({
+      id: order.id,
+      orderNumber: order.order_number,
+      status: order.status,
+      currency: order.currency,
+      subtotalMinor: this.toSafeMinor(order.subtotal_minor),
+      totalMinor: this.toSafeMinor(order.total_minor),
+      itemCount: Number(order.item_count),
+      sellerTotalMinor: this.toSafeMinor(order.seller_total_minor),
+      createdAt: order.created_at,
+      updatedAt: order.updated_at,
+    }));
+  }
+
   private buildSlug(value: string): string {
     const slug = value
       .trim()

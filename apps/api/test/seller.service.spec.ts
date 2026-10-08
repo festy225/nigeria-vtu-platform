@@ -406,4 +406,52 @@ describe('SellerService membership eligibility', () => {
     );
     expect(database.query.mock.calls[1]?.[1]).toEqual(['seller-id']);
   });
+
+  it('lists orders containing the authenticated seller items', async () => {
+    database.query
+      .mockResolvedValueOnce({
+        rows: [{ id: 'seller-id' }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'order-id',
+          order_number: '1001',
+          status: 'PLACED',
+          currency: 'NGN',
+          subtotal_minor: '150000',
+          total_minor: '150000',
+          item_count: '2',
+          seller_total_minor: '125000',
+          created_at: new Date('2026-10-08T10:00:00.000Z'),
+          updated_at: new Date('2026-10-08T10:05:00.000Z'),
+        }],
+        rowCount: 1,
+      });
+
+    const result = await service.listSellerOrders('user-id');
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: 'order-id',
+        orderNumber: '1001',
+        status: 'PLACED',
+        currency: 'NGN',
+        subtotalMinor: 150000,
+        totalMinor: 150000,
+        itemCount: 2,
+        sellerTotalMinor: 125000,
+      }),
+    ]);
+
+    expect(result[0]).not.toHaveProperty('customerId');
+    expect(database.query).toHaveBeenCalledTimes(2);
+    expect(database.query.mock.calls[0]?.[1]).toEqual(['user-id']);
+
+    const listQuery = database.query.mock.calls[1]?.[0] ?? '';
+    expect(listQuery).toContain('FROM marketplace_orders o');
+    expect(listQuery).toContain('JOIN marketplace_order_items item');
+    expect(listQuery).toContain('item.seller_id = $1');
+    expect(database.query.mock.calls[1]?.[1]).toEqual(['seller-id']);
+  });
 });

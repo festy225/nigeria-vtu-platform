@@ -92,6 +92,12 @@ export class SellerController {
     return this.sellers.createProduct(user.id, dto);
   }
 
+  @Get('orders')
+  @RequiresFeature('SELLER_STORES_ENABLED')
+  listSellerOrders(@CurrentUser() user: AuthenticatedUser) {
+    return this.sellers.listSellerOrders(user.id);
+  }
+
   @Get('products')
   @RequiresFeature('SELLER_STORES_ENABLED')
   listSellerProducts(@CurrentUser() user: AuthenticatedUser) {
