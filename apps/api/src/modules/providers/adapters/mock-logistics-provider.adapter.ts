@@ -3,6 +3,8 @@ import type {
   CheckLogisticsServiceabilityResponse,
   FindLogisticsOfficesRequest,
   FindLogisticsOfficesResponse,
+  BookLogisticsShipmentRequest,
+  BookLogisticsShipmentResponse,
   LogisticsProvider,
 } from '../interfaces/logistics-provider.interface';
 
@@ -38,6 +40,20 @@ export class MockLogisticsProviderAdapter implements LogisticsProvider {
         originCountry: request.origin.countryCode,
         destinationCountry: request.destination.countryCode,
         radiusKm: request.radiusKm ?? null,
+      },
+    };
+  }
+
+  async bookShipment(
+    request: BookLogisticsShipmentRequest,
+  ): Promise<BookLogisticsShipmentResponse> {
+    return {
+      trackingReference: `MOCK-${request.selectedOffice.providerOfficeId}-SHIPMENT`,
+      rawPayload: {
+        provider: this.name,
+        selectedOfficeId: request.selectedOffice.providerOfficeId,
+        originCountry: request.origin.countryCode,
+        destinationCountry: request.destination.countryCode,
       },
     };
   }

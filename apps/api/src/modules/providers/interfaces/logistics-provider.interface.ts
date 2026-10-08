@@ -41,6 +41,10 @@ export interface LogisticsProvider {
   findOffices(
     request: FindLogisticsOfficesRequest,
   ): Promise<FindLogisticsOfficesResponse>;
+
+  bookShipment(
+    request: BookLogisticsShipmentRequest,
+  ): Promise<BookLogisticsShipmentResponse>;
 }
 
 export interface LogisticsOffice {
@@ -62,5 +66,17 @@ export interface FindLogisticsOfficesRequest {
 
 export interface FindLogisticsOfficesResponse {
   offices: LogisticsOffice[];
+  rawPayload?: unknown;
+}
+
+export interface BookLogisticsShipmentRequest {
+  origin: LogisticsLocation;
+  destination: LogisticsLocation;
+  packages: LogisticsPackage[];
+  selectedOffice: LogisticsOffice;
+}
+
+export interface BookLogisticsShipmentResponse {
+  trackingReference?: string | null;
   rawPayload?: unknown;
 }

@@ -7,6 +7,7 @@ describe('MarketplaceFulfillmentController', () => {
     checkSellerFulfillmentServiceability: jest.fn(),
     findSellerFulfillmentOffices: jest.fn(),
     selectSellerFulfillmentOffice: jest.fn(),
+    bookSellerFulfillment: jest.fn(),
   } as unknown as jest.Mocked<MarketplaceFulfillmentService>;
 
   const controller = new MarketplaceFulfillmentController(fulfillment);
@@ -138,6 +139,41 @@ describe('MarketplaceFulfillmentController', () => {
           deliveryAvailable: true,
         },
         status: 'READY_FOR_FULFILLMENT',
+      });
+    });
+  });
+
+  describe('bookSellerFulfillment', () => {
+    it('uses the authenticated user id and order id when booking fulfillment', async () => {
+      fulfillment.bookSellerFulfillment.mockResolvedValue({
+        fulfillmentId: 'fulfillment-1',
+        orderId: 'order-1',
+        sellerId: 'seller-1',
+        providerConfigurationId: 'provider-config-1',
+        trackingReference: 'TEST-TRACK-123',
+        status: 'BOOKED',
+      });
+
+      const user = {
+        id: 'user-1',
+      } as any;
+
+      const result = await controller.bookSellerFulfillment(
+        user,
+        'order-1',
+      );
+
+      expect(
+        fulfillment.bookSellerFulfillment,
+      ).toHaveBeenCalledWith('order-1', 'user-1');
+
+      expect(result).toEqual({
+        fulfillmentId: 'fulfillment-1',
+        orderId: 'order-1',
+        sellerId: 'seller-1',
+        providerConfigurationId: 'provider-config-1',
+        trackingReference: 'TEST-TRACK-123',
+        status: 'BOOKED',
       });
     });
   });

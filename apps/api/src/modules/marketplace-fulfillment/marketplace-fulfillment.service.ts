@@ -547,6 +547,190 @@ export class MarketplaceFulfillmentService {
     });
   }
 
+  async bookSellerFulfillment(
+    orderId: string,
+    userId: string,
+  ) {
+    return this.database.withTransaction(async (client) => {
+      const sellerId = await this.sellers.getSellerIdByUserId(userId);
+
+      const fulfillment = await client.query<{
+        id: string;
+        order_id: string;
+        seller_id: string;
+        status: string;
+        provider_configuration_id: string | null;
+        tracking_reference: string | null;
+        origin_snapshot: {
+          address_line1: string;
+          address_line2?: string | null;
+          city: string;
+          state_province?: string | null;
+          postal_code?: string | null;
+          country_code: string;
+          latitude?: number | null;
+          longitude?: number | null;
+        };
+        destination_snapshot: {
+          address_line1: string;
+          address_line2?: string | null;
+          city: string;
+          state_province?: string | null;
+          postal_code?: string | null;
+          country_code: string;
+          latitude?: number | null;
+          longitude?: number | null;
+        };
+        selected_office_id: string | null;
+        selected_office_snapshot: {
+          providerOfficeId: string;
+          name: string;
+          address: {
+            addressLine1: string;
+            addressLine2?: string | null;
+            city: string;
+            stateProvince?: string | null;
+            postalCode?: string | null;
+            countryCode: string;
+            latitude?: number | null;
+            longitude?: number | null;
+          };
+          distanceKm?: number | null;
+          phone?: string | null;
+          pickupAvailable: boolean;
+          deliveryAvailable: boolean;
+          metadata?: Record<string, unknown>;
+        } | null;
+      }>(
+        `
+          SELECT
+            id,
+            order_id,
+            seller_id,
+            status,
+            provider_configuration_id,
+            tracking_reference,
+            origin_snapshot,
+            destination_snapshot,
+            selected_office_id,
+            selected_office_snapshot
+          FROM marketplace_fulfillments
+          WHERE order_id = $1
+            AND seller_id = $2
+          LIMIT 1
+          FOR UPDATE
+        `,
+        [orderId, sellerId],
+      );
+
+      if (fulfillment.rowCount === 0) {
+        throw new NotFoundException(
+          'Fulfillment not found for this seller and order',
+        );
+      }
+
+      const fulfillmentRow = fulfillment.rows[0];
+
+      if (fulfillmentRow.status === 'BOOKED') {
+        throw new ConflictException(
+          'Fulfillment shipment is already booked',
+        );
+      }
+
+      if (fulfillmentRow.status !== 'READY_FOR_FULFILLMENT') {
+        throw new ConflictException(
+          'Fulfillment shipment can only be booked when it is ready for fulfillment',
+        );
+      }
+
+      if (!fulfillmentRow.provider_configuration_id) {
+        throw new BadRequestException(
+          'Fulfillment logistics provider configuration is missing',
+        );
+      }
+
+      if (
+        !fulfillmentRow.selected_office_id ||
+        !fulfillmentRow.selected_office_snapshot
+      ) {
+        throw new BadRequestException(
+          'A logistics pickup office must be selected before booking',
+        );
+      }
+
+      const items = await client.query<{
+        quantity: number;
+      }>(
+        `
+          SELECT quantity
+          FROM marketplace_fulfillment_items
+          WHERE fulfillment_id = $1
+          ORDER BY id
+        `,
+        [fulfillmentRow.id],
+      );
+
+      if (items.rowCount === 0) {
+        throw new BadRequestException(
+          'Fulfillment does not contain any items',
+        );
+      }
+
+      const provider =
+        await this.logistics.getProviderRegistrationByConfigurationId(
+          fulfillmentRow.provider_configuration_id,
+        );
+
+      const result = await provider.provider.bookShipment({
+        origin: {
+          addressLine1: fulfillmentRow.origin_snapshot.address_line1,
+          addressLine2: fulfillmentRow.origin_snapshot.address_line2,
+          city: fulfillmentRow.origin_snapshot.city,
+          stateProvince: fulfillmentRow.origin_snapshot.state_province,
+          postalCode: fulfillmentRow.origin_snapshot.postal_code,
+          countryCode: fulfillmentRow.origin_snapshot.country_code,
+          latitude: fulfillmentRow.origin_snapshot.latitude,
+          longitude: fulfillmentRow.origin_snapshot.longitude,
+        },
+        destination: {
+          addressLine1: fulfillmentRow.destination_snapshot.address_line1,
+          addressLine2: fulfillmentRow.destination_snapshot.address_line2,
+          city: fulfillmentRow.destination_snapshot.city,
+          stateProvince: fulfillmentRow.destination_snapshot.state_province,
+          postalCode: fulfillmentRow.destination_snapshot.postal_code,
+          countryCode: fulfillmentRow.destination_snapshot.country_code,
+          latitude: fulfillmentRow.destination_snapshot.latitude,
+          longitude: fulfillmentRow.destination_snapshot.longitude,
+        },
+        packages: items.rows.map((item) => ({
+          quantity: item.quantity,
+        })),
+        selectedOffice: fulfillmentRow.selected_office_snapshot,
+      });
+
+      await client.query(
+        `
+          UPDATE marketplace_fulfillments
+          SET
+            tracking_reference = $1,
+            status = 'BOOKED',
+            updated_at = now()
+          WHERE id = $2
+        `,
+        [result.trackingReference ?? null, fulfillmentRow.id],
+      );
+
+      return {
+        fulfillmentId: fulfillmentRow.id,
+        orderId: fulfillmentRow.order_id,
+        sellerId: fulfillmentRow.seller_id,
+        providerConfigurationId: provider.providerConfigurationId,
+        trackingReference: result.trackingReference ?? null,
+        status: 'BOOKED',
+      };
+    });
+  }
+
   async getSellerFulfillment(
     orderId: string,
     sellerId: string,

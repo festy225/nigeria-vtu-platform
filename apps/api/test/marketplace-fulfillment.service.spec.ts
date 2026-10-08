@@ -531,4 +531,127 @@ describe('MarketplaceFulfillmentService', () => {
     });
   });
 
+  describe('bookSellerFulfillment', () => {
+    const fulfillmentRow = {
+      id: 'fulfillment-1',
+      order_id: 'order-1',
+      seller_id: 'seller-1',
+      status: 'READY_FOR_FULFILLMENT',
+      provider_configuration_id: 'provider-config-1',
+      tracking_reference: null,
+      origin_snapshot: {
+        address_line1: 'Seller Street',
+        address_line2: null,
+        city: 'Lagos',
+        state_province: 'Lagos',
+        postal_code: '100001',
+        country_code: 'NG',
+        latitude: 6.5244,
+        longitude: 3.3792,
+      },
+      destination_snapshot: {
+        address_line1: 'Customer Street',
+        address_line2: null,
+        city: 'Lagos',
+        state_province: 'Lagos',
+        postal_code: '100002',
+        country_code: 'NG',
+        latitude: 6.6018,
+        longitude: 3.3515,
+      },
+      selected_office_id: 'office-1',
+      selected_office_snapshot: {
+        providerOfficeId: 'office-1',
+        name: 'Test Logistics Office',
+        address: {
+          addressLine1: 'Office Street',
+          city: 'Lagos',
+          countryCode: 'NG',
+        },
+        distanceKm: 2.5,
+        pickupAvailable: true,
+        deliveryAvailable: true,
+      },
+    };
+
+    it('books the shipment and moves fulfillment to BOOKED', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+
+      transaction.query
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [fulfillmentRow],
+        })
+        .mockResolvedValueOnce({
+          rowCount: 2,
+          rows: [{ quantity: 2 }, { quantity: 1 }],
+        })
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [],
+        });
+
+      const bookShipment = jest.fn().mockResolvedValue({
+        trackingReference: 'TEST-TRACK-123',
+        rawPayload: {
+          provider: 'test-logistics',
+        },
+      });
+
+      logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        provider: {
+          bookShipment,
+        },
+        providerConfigurationId: 'provider-config-1',
+      });
+
+      const result = await service.bookSellerFulfillment(
+        'order-1',
+        'user-1',
+      );
+
+      expect(bookShipment).toHaveBeenCalledWith({
+        origin: {
+          addressLine1: 'Seller Street',
+          addressLine2: null,
+          city: 'Lagos',
+          stateProvince: 'Lagos',
+          postalCode: '100001',
+          countryCode: 'NG',
+          latitude: 6.5244,
+          longitude: 3.3792,
+        },
+        destination: {
+          addressLine1: 'Customer Street',
+          addressLine2: null,
+          city: 'Lagos',
+          stateProvince: 'Lagos',
+          postalCode: '100002',
+          countryCode: 'NG',
+          latitude: 6.6018,
+          longitude: 3.3515,
+        },
+        packages: [
+          { quantity: 2 },
+          { quantity: 1 },
+        ],
+        selectedOffice: fulfillmentRow.selected_office_snapshot,
+      });
+
+      expect(transaction.query).toHaveBeenLastCalledWith(
+        expect.stringContaining('tracking_reference = $1'),
+        ['TEST-TRACK-123', 'fulfillment-1'],
+      );
+
+      expect(result).toEqual({
+        fulfillmentId: 'fulfillment-1',
+        orderId: 'order-1',
+        sellerId: 'seller-1',
+        providerConfigurationId: 'provider-config-1',
+        trackingReference: 'TEST-TRACK-123',
+        status: 'BOOKED',
+      });
+    });
+  });
+
 });

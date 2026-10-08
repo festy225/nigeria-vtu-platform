@@ -64,6 +64,15 @@ export class MarketplaceFulfillmentController {
     );
   }
 
+  @Post(':orderId/book')
+  @RequiresFeature('MARKETPLACE_DELIVERY_ENABLED')
+  bookSellerFulfillment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId') orderId: string,
+  ) {
+    return this.fulfillment.bookSellerFulfillment(orderId, user.id);
+  }
+
   @Post(':orderId/office')
   @RequiresFeature('MARKETPLACE_DELIVERY_ENABLED')
   selectSellerFulfillmentOffice(
