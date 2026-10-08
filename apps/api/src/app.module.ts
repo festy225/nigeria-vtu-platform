@@ -17,6 +17,7 @@ import { MembershipModule } from './modules/membership/membership.module';
 import { KycModule } from './modules/kyc/kyc.module';
 import { MarketplaceOrderModule } from './modules/marketplace-orders/marketplace-order.module';
 import { MarketplaceCartModule } from './modules/marketplace-cart/marketplace-cart.module';
+import { MarketplaceFulfillmentModule } from './modules/marketplace-fulfillment/marketplace-fulfillment.module';
 
 @Global()
 @Module({
@@ -39,6 +40,7 @@ import { MarketplaceCartModule } from './modules/marketplace-cart/marketplace-ca
     KycModule,
     MarketplaceOrderModule,
     MarketplaceCartModule,
+    MarketplaceFulfillmentModule,
   ],
   providers: []})
 export class AppModule {}

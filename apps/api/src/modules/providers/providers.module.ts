@@ -7,6 +7,9 @@ import { MockAirtimeProviderAdapter } from './adapters/mock-airtime-provider.ada
 import { AirtimeProviderAdapterResolver } from './adapters/airtime-provider-adapter.resolver';
 import { MockPaymentProviderAdapter } from './adapters/mock-payment-provider.adapter';
 import { PaymentProviderAdapterResolver } from './adapters/payment-provider-adapter.resolver';
+import { MockLogisticsProviderAdapter } from './adapters/mock-logistics-provider.adapter';
+import { LogisticsProviderAdapterResolver } from './adapters/logistics-provider-adapter.resolver';
+import { LogisticsProviderRouterService } from './routing/logistics-provider-router.service';
 import {
   KYC_PROVIDER_ADAPTERS,
   KycProviderAdapterResolver,
@@ -37,6 +40,9 @@ export const AIRTIME_PROVIDER_REGISTRATIONS = Symbol(
     MockAirtimeProviderAdapter,
     AirtimeProviderAdapterResolver,
     PaymentProviderAdapterResolver,
+    MockLogisticsProviderAdapter,
+    LogisticsProviderAdapterResolver,
+    LogisticsProviderRouterService,
     PaymentProviderRouterService,
 
     {
@@ -86,6 +92,9 @@ export const AIRTIME_PROVIDER_REGISTRATIONS = Symbol(
     AirtimeProviderRouterService,
     MockPaymentProviderAdapter,
     MockAirtimeProviderAdapter,
+    MockLogisticsProviderAdapter,
+    LogisticsProviderAdapterResolver,
+    LogisticsProviderRouterService,
   ],
 })
 export class ProvidersModule {}

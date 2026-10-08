@@ -15,6 +15,7 @@ import type {
 } from './seller.dtos';
 import type { CreateMarketplaceProductDto } from './dto/create-marketplace-product.dto';
 import type { UpdateMarketplaceProductDto } from './dto/update-marketplace-product.dto';
+import type { CreateSellerLocationDto } from './dto/create-seller-location.dto';
 
 interface SellerReviewRow {
   id: string;
@@ -86,6 +87,21 @@ export class SellerService {
     );
 
     return result.rows[0]?.eligible ?? false;
+  }
+
+  async getSellerIdByUserId(userId: string): Promise<string> {
+    const result = await this.database.query<{ id: string }>(
+      `SELECT id
+       FROM marketplace_sellers
+       WHERE user_id = $1`,
+      [userId],
+    );
+
+    if (result.rowCount === 0) {
+      throw new NotFoundException('Seller application not found');
+    }
+
+    return result.rows[0].id;
   }
 
   async listApplications() {
@@ -587,6 +603,119 @@ export class SellerService {
     }
 
     return nextStatus;
+  }
+
+  async createSellerLocation(
+    userId: string,
+    dto: CreateSellerLocationDto,
+  ) {
+    const sellerId = await this.getSellerIdByUserId(userId);
+
+    const result = await this.database.query<{
+      id: string;
+      seller_id: string;
+      location_name: string;
+      contact_name: string | null;
+      contact_phone: string | null;
+      address_line1: string;
+      address_line2: string | null;
+      city: string;
+      state_province: string | null;
+      postal_code: string | null;
+      country_code: string;
+      latitude: number | null;
+      longitude: number | null;
+      is_default: boolean;
+      enabled: boolean;
+      created_at: Date;
+      updated_at: Date;
+    }>(
+      `INSERT INTO marketplace_seller_locations (
+         seller_id,
+         location_name,
+         contact_name,
+         contact_phone,
+         address_line1,
+         address_line2,
+         city,
+         state_province,
+         postal_code,
+         country_code,
+         latitude,
+         longitude,
+         is_default
+       )
+       VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+       )
+       RETURNING
+         id,
+         seller_id,
+         location_name,
+         contact_name,
+         contact_phone,
+         address_line1,
+         address_line2,
+         city,
+         state_province,
+         postal_code,
+         country_code,
+         latitude,
+         longitude,
+         is_default,
+         enabled,
+         created_at,
+         updated_at`,
+      [
+        sellerId,
+        dto.locationName,
+        dto.contactName ?? null,
+        dto.contactPhone ?? null,
+        dto.addressLine1,
+        dto.addressLine2 ?? null,
+        dto.city,
+        dto.stateProvince ?? null,
+        dto.postalCode ?? null,
+        dto.countryCode,
+        dto.latitude ?? null,
+        dto.longitude ?? null,
+        dto.isDefault ?? false,
+      ],
+    );
+
+    return result.rows[0];
+  }
+
+  async listSellerLocations(userId: string) {
+    const sellerId = await this.getSellerIdByUserId(userId);
+
+    const result = await this.database.query(
+      `SELECT
+         id,
+         seller_id,
+         location_name,
+         contact_name,
+         contact_phone,
+         address_line1,
+         address_line2,
+         city,
+         state_province,
+         postal_code,
+         country_code,
+         latitude,
+         longitude,
+         is_default,
+         enabled,
+         created_at,
+         updated_at
+       FROM marketplace_seller_locations
+       WHERE seller_id = $1
+         AND enabled = true
+       ORDER BY is_default DESC, created_at DESC, id`,
+      [sellerId],
+    );
+
+    return result.rows;
   }
 
   private buildSlug(value: string): string {

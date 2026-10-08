@@ -286,4 +286,124 @@ describe('SellerService membership eligibility', () => {
 
     expect(audit.record).not.toHaveBeenCalled();
   });
+
+  it('creates a seller location using the authenticated seller identity', async () => {
+    database.query
+      .mockResolvedValueOnce({
+        rows: [{ id: 'seller-id' }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'location-id',
+          seller_id: 'seller-id',
+          location_name: 'Main Warehouse',
+          contact_name: 'Seller Contact',
+          contact_phone: '+2348012345678',
+          address_line1: '10 Market Road',
+          address_line2: null,
+          city: 'Lagos',
+          state_province: 'Lagos',
+          postal_code: '100001',
+          country_code: 'NG',
+          latitude: 6.5244,
+          longitude: 3.3792,
+          is_default: true,
+          enabled: true,
+        }],
+        rowCount: 1,
+      });
+
+    const result = await service.createSellerLocation('user-id', {
+      locationName: 'Main Warehouse',
+      contactName: 'Seller Contact',
+      contactPhone: '+2348012345678',
+      addressLine1: '10 Market Road',
+      city: 'Lagos',
+      stateProvince: 'Lagos',
+      postalCode: '100001',
+      countryCode: 'NG',
+      latitude: 6.5244,
+      longitude: 3.3792,
+      isDefault: true,
+    });
+
+    expect(result).toMatchObject({
+      id: 'location-id',
+      seller_id: 'seller-id',
+      location_name: 'Main Warehouse',
+      country_code: 'NG',
+      is_default: true,
+      enabled: true,
+    });
+
+    expect(database.query).toHaveBeenCalledTimes(2);
+    expect(database.query.mock.calls[0]?.[1]).toEqual(['user-id']);
+
+    const insert = database.query.mock.calls[1]?.[0] ?? '';
+    expect(insert).toContain(
+      'INSERT INTO marketplace_seller_locations',
+    );
+    expect(database.query.mock.calls[1]?.[1]).toEqual([
+      'seller-id',
+      'Main Warehouse',
+      'Seller Contact',
+      '+2348012345678',
+      '10 Market Road',
+      null,
+      'Lagos',
+      'Lagos',
+      '100001',
+      'NG',
+      6.5244,
+      3.3792,
+      true,
+    ]);
+  });
+
+  it('lists only enabled locations belonging to the authenticated seller', async () => {
+    database.query
+      .mockResolvedValueOnce({
+        rows: [{ id: 'seller-id' }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'location-id',
+          seller_id: 'seller-id',
+          location_name: 'Main Warehouse',
+          city: 'Lagos',
+          country_code: 'NG',
+          is_default: true,
+          enabled: true,
+        }],
+        rowCount: 1,
+      });
+
+    const result = await service.listSellerLocations('user-id');
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: 'location-id',
+        seller_id: 'seller-id',
+        location_name: 'Main Warehouse',
+        is_default: true,
+        enabled: true,
+      }),
+    ]);
+
+    expect(database.query).toHaveBeenCalledTimes(2);
+    expect(database.query.mock.calls[0]?.[1]).toEqual(['user-id']);
+
+    const listQuery = database.query.mock.calls[1]?.[0] ?? '';
+    expect(listQuery).toContain(
+      'FROM marketplace_seller_locations',
+    );
+    expect(listQuery).toContain('WHERE seller_id = $1');
+    expect(listQuery).toContain('AND enabled = true');
+    expect(listQuery).toContain(
+      'ORDER BY is_default DESC, created_at DESC, id',
+    );
+    expect(database.query.mock.calls[1]?.[1]).toEqual(['seller-id']);
+  });
 });

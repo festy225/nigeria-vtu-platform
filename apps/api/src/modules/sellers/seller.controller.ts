@@ -13,6 +13,7 @@ import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { FeatureGuard } from '../../common/features/feature.guard';
 import { RequiresFeature } from '../../common/features/feature.decorator';
 import type { AuthenticatedUser } from '../auth/auth.types';
+import { CreateSellerLocationDto } from './dto/create-seller-location.dto';
 import {
   CreateMarketplaceProductDto,
 } from './dto/create-marketplace-product.dto';
@@ -65,6 +66,21 @@ export class SellerController {
   @RequiresFeature('SELLER_STORES_ENABLED')
   getApplication(@CurrentUser() user: AuthenticatedUser) {
     return this.sellers.getApplication(user.id);
+  }
+
+  @Get('locations')
+  @RequiresFeature('SELLER_STORES_ENABLED')
+  listSellerLocations(@CurrentUser() user: AuthenticatedUser) {
+    return this.sellers.listSellerLocations(user.id);
+  }
+
+  @Post('locations')
+  @RequiresFeature('SELLER_STORES_ENABLED')
+  createSellerLocation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreateSellerLocationDto,
+  ) {
+    return this.sellers.createSellerLocation(user.id, dto);
   }
 
   @Post('products')
