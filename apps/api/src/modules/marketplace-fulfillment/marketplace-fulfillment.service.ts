@@ -145,20 +145,24 @@ export class MarketplaceFulfillmentService {
         );
       }
 
+      const provider = await this.logistics.getProviderRegistration();
+
       const fulfillment = await client.query<{ id: string }>(
         `
           INSERT INTO marketplace_fulfillments (
             order_id,
             seller_id,
+            provider_configuration_id,
             origin_snapshot,
             destination_snapshot
           )
-          VALUES ($1, $2, $3::jsonb, $4::jsonb)
+          VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
           RETURNING id
         `,
         [
           orderId,
           sellerId,
+          provider.providerConfigurationId,
           JSON.stringify(sellerLocation.rows[0]),
           JSON.stringify(customerAddress.rows[0]),
         ],
@@ -199,6 +203,7 @@ export class MarketplaceFulfillmentService {
 
     const fulfillment = await this.database.query<{
       id: string;
+      provider_configuration_id: string | null;
       origin_snapshot: {
         address_line1: string;
         address_line2?: string | null;
@@ -223,6 +228,7 @@ export class MarketplaceFulfillmentService {
       `
         SELECT
           id,
+          provider_configuration_id,
           origin_snapshot,
           destination_snapshot
         FROM marketplace_fulfillments
@@ -241,7 +247,16 @@ export class MarketplaceFulfillmentService {
 
     const fulfillmentRow = fulfillment.rows[0];
 
-    const provider = await this.logistics.getProviderRegistration();
+    if (!fulfillmentRow.provider_configuration_id) {
+      throw new BadRequestException(
+        'Fulfillment logistics provider configuration is missing',
+      );
+    }
+
+    const provider =
+      await this.logistics.getProviderRegistrationByConfigurationId(
+        fulfillmentRow.provider_configuration_id,
+      );
 
     const result = await provider.provider.findOffices({
       origin: {
@@ -283,6 +298,7 @@ export class MarketplaceFulfillmentService {
 
     const fulfillment = await this.database.query<{
       id: string;
+      provider_configuration_id: string | null;
       origin_snapshot: {
         address_line1: string;
         address_line2?: string | null;
@@ -307,6 +323,7 @@ export class MarketplaceFulfillmentService {
       `
         SELECT
           id,
+          provider_configuration_id,
           origin_snapshot,
           destination_snapshot
         FROM marketplace_fulfillments
@@ -337,7 +354,16 @@ export class MarketplaceFulfillmentService {
       [fulfillmentRow.id],
     );
 
-    const provider = await this.logistics.getProviderRegistration();
+    if (!fulfillmentRow.provider_configuration_id) {
+      throw new BadRequestException(
+        'Fulfillment logistics provider configuration is missing',
+      );
+    }
+
+    const provider =
+      await this.logistics.getProviderRegistrationByConfigurationId(
+        fulfillmentRow.provider_configuration_id,
+      );
 
     const result = await provider.provider.checkServiceability({
       origin: {
@@ -371,6 +397,154 @@ export class MarketplaceFulfillmentService {
       serviceable: result.serviceable,
       rawPayload: result.rawPayload,
     };
+  }
+
+  async selectSellerFulfillmentOffice(
+    orderId: string,
+    userId: string,
+    providerOfficeId: string,
+  ) {
+    return this.database.withTransaction(async (client) => {
+      const sellerId = await this.sellers.getSellerIdByUserId(userId);
+
+      const fulfillment = await client.query<{
+        id: string;
+        order_id: string;
+        seller_id: string;
+        status: string;
+        provider_configuration_id: string | null;
+        origin_snapshot: {
+          address_line1: string;
+          address_line2?: string | null;
+          city: string;
+          state_province?: string | null;
+          postal_code?: string | null;
+          country_code: string;
+          latitude?: number | null;
+          longitude?: number | null;
+        };
+        destination_snapshot: {
+          address_line1: string;
+          address_line2?: string | null;
+          city: string;
+          state_province?: string | null;
+          postal_code?: string | null;
+          country_code: string;
+          latitude?: number | null;
+          longitude?: number | null;
+        };
+      }>(
+        `
+          SELECT
+            id,
+            order_id,
+            seller_id,
+            status,
+            provider_configuration_id,
+            origin_snapshot,
+            destination_snapshot
+          FROM marketplace_fulfillments
+          WHERE order_id = $1
+            AND seller_id = $2
+          LIMIT 1
+          FOR UPDATE
+        `,
+        [orderId, sellerId],
+      );
+
+      if (fulfillment.rowCount === 0) {
+        throw new NotFoundException(
+          'Fulfillment not found for this seller and order',
+        );
+      }
+
+      const fulfillmentRow = fulfillment.rows[0];
+
+      if (fulfillmentRow.status !== 'PENDING') {
+        throw new ConflictException(
+          'Fulfillment office can only be selected while the fulfillment is pending',
+        );
+      }
+
+      if (!fulfillmentRow.provider_configuration_id) {
+        throw new BadRequestException(
+          'Fulfillment logistics provider configuration is missing',
+        );
+      }
+
+      const provider =
+        await this.logistics.getProviderRegistrationByConfigurationId(
+          fulfillmentRow.provider_configuration_id,
+        );
+
+      const result = await provider.provider.findOffices({
+        origin: {
+          addressLine1: fulfillmentRow.origin_snapshot.address_line1,
+          addressLine2: fulfillmentRow.origin_snapshot.address_line2,
+          city: fulfillmentRow.origin_snapshot.city,
+          stateProvince: fulfillmentRow.origin_snapshot.state_province,
+          postalCode: fulfillmentRow.origin_snapshot.postal_code,
+          countryCode: fulfillmentRow.origin_snapshot.country_code,
+          latitude: fulfillmentRow.origin_snapshot.latitude,
+          longitude: fulfillmentRow.origin_snapshot.longitude,
+        },
+        destination: {
+          addressLine1: fulfillmentRow.destination_snapshot.address_line1,
+          addressLine2: fulfillmentRow.destination_snapshot.address_line2,
+          city: fulfillmentRow.destination_snapshot.city,
+          stateProvince: fulfillmentRow.destination_snapshot.state_province,
+          postalCode: fulfillmentRow.destination_snapshot.postal_code,
+          countryCode: fulfillmentRow.destination_snapshot.country_code,
+          latitude: fulfillmentRow.destination_snapshot.latitude,
+          longitude: fulfillmentRow.destination_snapshot.longitude,
+        },
+        radiusKm: null,
+      });
+
+      const selectedOffice = result.offices.find(
+        (office) => office.providerOfficeId === providerOfficeId,
+      );
+
+      if (!selectedOffice) {
+        throw new NotFoundException(
+          'Selected logistics office was not found',
+        );
+      }
+
+      if (!selectedOffice.pickupAvailable) {
+        throw new BadRequestException(
+          'Selected logistics office does not support pickup',
+        );
+      }
+
+      await client.query(
+        `
+          UPDATE marketplace_fulfillments
+          SET
+            selected_office_id = $1,
+            selected_office_snapshot = $2::jsonb,
+            status = 'READY_FOR_FULFILLMENT',
+            updated_at = now()
+          WHERE id = $3
+        `,
+        [
+          selectedOffice.providerOfficeId,
+          JSON.stringify(selectedOffice),
+          fulfillmentRow.id,
+        ],
+      );
+
+      return {
+        fulfillmentId: fulfillmentRow.id,
+        orderId: fulfillmentRow.order_id,
+        sellerId: fulfillmentRow.seller_id,
+        providerConfigurationId:
+          provider.providerConfigurationId,
+        selectedOfficeId: selectedOffice.providerOfficeId,
+        selectedOffice,
+        status: 'READY_FOR_FULFILLMENT',
+      };
+    });
   }
 
   async getSellerFulfillment(

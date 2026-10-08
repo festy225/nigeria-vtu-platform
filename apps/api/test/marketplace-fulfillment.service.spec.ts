@@ -2,8 +2,13 @@ import { NotFoundException } from '@nestjs/common';
 import { MarketplaceFulfillmentService } from '../src/modules/marketplace-fulfillment/marketplace-fulfillment.service';
 
 describe('MarketplaceFulfillmentService', () => {
+  const transaction = {
+    query: jest.fn(),
+  };
+
   const database = {
     query: jest.fn(),
+    withTransaction: jest.fn(),
   };
 
   const sellers = {
@@ -12,12 +17,18 @@ describe('MarketplaceFulfillmentService', () => {
 
   const logistics = {
     getProviderRegistration: jest.fn(),
+    getProviderRegistrationByConfigurationId: jest.fn(),
   };
 
   let service: MarketplaceFulfillmentService;
 
   beforeEach(() => {
     jest.clearAllMocks();
+
+    database.withTransaction.mockImplementation(
+      async (callback: (client: typeof transaction) => unknown) =>
+        callback(transaction),
+    );
 
     service = new MarketplaceFulfillmentService(
       database as never,
@@ -35,6 +46,7 @@ describe('MarketplaceFulfillmentService', () => {
         rows: [
           {
             id: 'fulfillment-1',
+            provider_configuration_id: 'provider-config-1',
             origin_snapshot: {
               address_line1: 'Seller Street',
               address_line2: null,
@@ -79,7 +91,7 @@ describe('MarketplaceFulfillmentService', () => {
         },
       });
 
-      logistics.getProviderRegistration.mockResolvedValue({
+      logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
         provider: {
           findOffices,
         },
@@ -153,7 +165,7 @@ describe('MarketplaceFulfillmentService', () => {
         ),
       ).rejects.toBeInstanceOf(NotFoundException);
 
-      expect(logistics.getProviderRegistration).not.toHaveBeenCalled();
+      expect(logistics.getProviderRegistrationByConfigurationId).not.toHaveBeenCalled();
     });
   });
 
@@ -167,6 +179,7 @@ describe('MarketplaceFulfillmentService', () => {
           rows: [
             {
               id: 'fulfillment-1',
+              provider_configuration_id: 'provider-config-1',
               origin_snapshot: {
                 address_line1: 'Seller Street',
                 address_line2: null,
@@ -205,7 +218,7 @@ describe('MarketplaceFulfillmentService', () => {
         },
       });
 
-      logistics.getProviderRegistration.mockResolvedValue({
+      logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
         provider: {
           checkServiceability,
         },
@@ -268,7 +281,254 @@ describe('MarketplaceFulfillmentService', () => {
         ),
       ).rejects.toBeInstanceOf(NotFoundException);
 
-      expect(logistics.getProviderRegistration).not.toHaveBeenCalled();
+      expect(logistics.getProviderRegistrationByConfigurationId).not.toHaveBeenCalled();
     });
   });
+
+  describe('selectSellerFulfillmentOffice', () => {
+    const fulfillmentRow = {
+      id: 'fulfillment-1',
+      order_id: 'order-1',
+      seller_id: 'seller-1',
+      status: 'PENDING',
+      provider_configuration_id: 'provider-config-1',
+      origin_snapshot: {
+        address_line1: 'Seller Street',
+        address_line2: null,
+        city: 'Lagos',
+        state_province: 'Lagos',
+        postal_code: '100001',
+        country_code: 'NG',
+        latitude: 6.5244,
+        longitude: 3.3792,
+      },
+      destination_snapshot: {
+        address_line1: 'Customer Street',
+        address_line2: null,
+        city: 'Lagos',
+        state_province: 'Lagos',
+        postal_code: '100002',
+        country_code: 'NG',
+        latitude: 6.6018,
+        longitude: 3.3515,
+      },
+    };
+
+    it('selects a valid pickup office and moves fulfillment to READY_FOR_FULFILLMENT', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+
+      transaction.query.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [fulfillmentRow],
+      });
+
+      const selectedOffice = {
+        providerOfficeId: 'office-1',
+        name: 'Test Logistics Office',
+        address: {
+          addressLine1: 'Office Street',
+          city: 'Lagos',
+          countryCode: 'NG',
+        },
+        distanceKm: 2.5,
+        pickupAvailable: true,
+        deliveryAvailable: true,
+      };
+
+      const findOffices = jest.fn().mockResolvedValue({
+        offices: [selectedOffice],
+        rawPayload: {
+          provider: 'test-logistics',
+        },
+      });
+
+      logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        provider: {
+          findOffices,
+        },
+        providerConfigurationId: 'provider-config-1',
+      });
+
+      transaction.query.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [],
+      });
+
+      const result = await service.selectSellerFulfillmentOffice(
+        'order-1',
+        'user-1',
+        'office-1',
+      );
+
+      expect(findOffices).toHaveBeenCalledWith({
+        origin: {
+          addressLine1: 'Seller Street',
+          addressLine2: null,
+          city: 'Lagos',
+          stateProvince: 'Lagos',
+          postalCode: '100001',
+          countryCode: 'NG',
+          latitude: 6.5244,
+          longitude: 3.3792,
+        },
+        destination: {
+          addressLine1: 'Customer Street',
+          addressLine2: null,
+          city: 'Lagos',
+          stateProvince: 'Lagos',
+          postalCode: '100002',
+          countryCode: 'NG',
+          latitude: 6.6018,
+          longitude: 3.3515,
+        },
+        radiusKm: null,
+      });
+
+      expect(transaction.query).toHaveBeenLastCalledWith(
+        expect.stringContaining('selected_office_id = $1'),
+        [
+          'office-1',
+          JSON.stringify(selectedOffice),
+          'fulfillment-1',
+        ],
+      );
+
+      expect(result).toEqual({
+        fulfillmentId: 'fulfillment-1',
+        orderId: 'order-1',
+        sellerId: 'seller-1',
+        providerConfigurationId: 'provider-config-1',
+        selectedOfficeId: 'office-1',
+        selectedOffice,
+        status: 'READY_FOR_FULFILLMENT',
+      });
+    });
+
+    it('fails when the selected office is not returned by the provider', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+
+      transaction.query.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [fulfillmentRow],
+      });
+
+      logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        provider: {
+          findOffices: jest.fn().mockResolvedValue({
+            offices: [],
+          }),
+        },
+        providerConfigurationId: 'provider-config-1',
+      });
+
+      await expect(
+        service.selectSellerFulfillmentOffice(
+          'order-1',
+          'user-1',
+          'missing-office',
+        ),
+      ).rejects.toThrow('Selected logistics office was not found');
+
+      expect(transaction.query).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails when the selected office does not support pickup', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+
+      transaction.query.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [fulfillmentRow],
+      });
+
+      logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        provider: {
+          findOffices: jest.fn().mockResolvedValue({
+            offices: [
+              {
+                providerOfficeId: 'office-1',
+                name: 'Delivery Only Office',
+                address: {
+                  addressLine1: 'Office Street',
+                  city: 'Lagos',
+                  countryCode: 'NG',
+                },
+                pickupAvailable: false,
+                deliveryAvailable: true,
+              },
+            ],
+          }),
+        },
+        providerConfigurationId: 'provider-config-1',
+      });
+
+      await expect(
+        service.selectSellerFulfillmentOffice(
+          'order-1',
+          'user-1',
+          'office-1',
+        ),
+      ).rejects.toThrow(
+        'Selected logistics office does not support pickup',
+      );
+
+      expect(transaction.query).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails when the fulfillment is no longer pending', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+
+      transaction.query.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [
+          {
+            ...fulfillmentRow,
+            status: 'READY_FOR_FULFILLMENT',
+          },
+        ],
+      });
+
+      await expect(
+        service.selectSellerFulfillmentOffice(
+          'order-1',
+          'user-1',
+          'office-1',
+        ),
+      ).rejects.toThrow(
+        'Fulfillment office can only be selected while the fulfillment is pending',
+      );
+
+      expect(
+        logistics.getProviderRegistrationByConfigurationId,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('fails when the fulfillment provider configuration is missing', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+
+      transaction.query.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [
+          {
+            ...fulfillmentRow,
+            provider_configuration_id: null,
+          },
+        ],
+      });
+
+      await expect(
+        service.selectSellerFulfillmentOffice(
+          'order-1',
+          'user-1',
+          'office-1',
+        ),
+      ).rejects.toThrow(
+        'Fulfillment logistics provider configuration is missing',
+      );
+
+      expect(
+        logistics.getProviderRegistrationByConfigurationId,
+      ).not.toHaveBeenCalled();
+    });
+  });
+
 });
