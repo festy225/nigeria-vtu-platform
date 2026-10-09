@@ -775,6 +775,118 @@ export class SellerService {
     }));
   }
 
+  async getSellerOrder(userId: string, orderId: string) {
+    const sellerId = await this.getSellerIdByUserId(userId);
+
+    const result = await this.database.query<{
+      id: string;
+      order_number: string;
+      status: string;
+      currency: CurrencyCode;
+      subtotal_minor: string | number;
+      total_minor: string | number;
+      item_count: string | number;
+      seller_total_minor: string | number;
+      created_at: Date;
+      updated_at: Date;
+    }>(
+      `SELECT
+         o.id,
+         o.order_number::text,
+         o.status,
+         o.currency,
+         o.subtotal_minor,
+         o.total_minor,
+         COUNT(item.id)::int AS item_count,
+         COALESCE(SUM(item.line_total_minor), 0)::bigint
+           AS seller_total_minor,
+         o.created_at,
+         o.updated_at
+       FROM marketplace_orders o
+       JOIN marketplace_order_items item
+         ON item.order_id = o.id
+        AND item.seller_id = $1
+       WHERE o.id = $2
+       GROUP BY
+         o.id,
+         o.order_number,
+         o.status,
+         o.currency,
+         o.subtotal_minor,
+         o.total_minor,
+         o.created_at,
+         o.updated_at`,
+      [sellerId, orderId],
+    );
+
+    const order = result.rows[0];
+
+    if (!order) {
+      throw new NotFoundException('Seller order not found');
+    }
+
+    const items = await this.database.query<{
+      id: string;
+      product_id: string;
+      variant_id: string | null;
+      quantity: number;
+      unit_price_minor: string | number;
+      line_total_minor: string | number;
+      currency: CurrencyCode;
+      product_name_snapshot: string;
+      product_description_snapshot: string;
+      seller_name_snapshot: string;
+      sku_snapshot: string | null;
+      variant_description_snapshot: unknown;
+    }>(
+      `SELECT
+         id,
+         product_id,
+         variant_id,
+         quantity,
+         unit_price_minor,
+         line_total_minor,
+         currency,
+         product_name_snapshot,
+         product_description_snapshot,
+         seller_name_snapshot,
+         sku_snapshot,
+         variant_description_snapshot
+       FROM marketplace_order_items
+       WHERE order_id = $1
+         AND seller_id = $2
+       ORDER BY created_at, id`,
+      [orderId, sellerId],
+    );
+
+    return {
+      id: order.id,
+      orderNumber: order.order_number,
+      status: order.status,
+      currency: order.currency,
+      subtotalMinor: this.toSafeMinor(order.subtotal_minor),
+      totalMinor: this.toSafeMinor(order.total_minor),
+      itemCount: Number(order.item_count),
+      sellerTotalMinor: this.toSafeMinor(order.seller_total_minor),
+      createdAt: order.created_at,
+      updatedAt: order.updated_at,
+      items: items.rows.map((item) => ({
+        id: item.id,
+        productId: item.product_id,
+        variantId: item.variant_id,
+        productName: item.product_name_snapshot,
+        productDescription: item.product_description_snapshot,
+        sellerName: item.seller_name_snapshot,
+        sku: item.sku_snapshot,
+        variantDescription: item.variant_description_snapshot,
+        quantity: item.quantity,
+        unitPriceMinor: this.toSafeMinor(item.unit_price_minor),
+        lineTotalMinor: this.toSafeMinor(item.line_total_minor),
+        currency: item.currency,
+      })),
+    };
+  }
+
   private buildSlug(value: string): string {
     const slug = value
       .trim()

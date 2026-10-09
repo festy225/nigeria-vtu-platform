@@ -407,6 +407,103 @@ describe('SellerService membership eligibility', () => {
     expect(database.query.mock.calls[1]?.[1]).toEqual(['seller-id']);
   });
 
+
+  it("retrieves order details and only the authenticated seller's items", async () => {
+    database.query
+      .mockResolvedValueOnce({
+        rows: [{ id: 'seller-id' }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'order-id',
+          order_number: '1001',
+          status: 'PLACED',
+          currency: 'NGN',
+          subtotal_minor: '150000',
+          total_minor: '150000',
+          item_count: '1',
+          seller_total_minor: '125000',
+          created_at: new Date('2026-10-08T10:00:00.000Z'),
+          updated_at: new Date('2026-10-08T10:05:00.000Z'),
+        }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'item-id',
+          product_id: 'product-id',
+          variant_id: 'variant-id',
+          quantity: 2,
+          unit_price_minor: '62500',
+          line_total_minor: '125000',
+          currency: 'NGN',
+          product_name_snapshot: 'Example Shoes',
+          product_description_snapshot: 'Black running shoes',
+          seller_name_snapshot: 'Example Store',
+          sku_snapshot: 'SHOE-BLK-42',
+          variant_description_snapshot: [{ name: 'Size', value: '42' }],
+        }],
+        rowCount: 1,
+      });
+
+    const result = await service.getSellerOrder('user-id', 'order-id');
+
+    expect(result).toEqual(expect.objectContaining({
+      id: 'order-id',
+      orderNumber: '1001',
+      status: 'PLACED',
+      itemCount: 1,
+      sellerTotalMinor: 125000,
+      items: [{
+        id: 'item-id',
+        productId: 'product-id',
+        variantId: 'variant-id',
+        productName: 'Example Shoes',
+        productDescription: 'Black running shoes',
+        sellerName: 'Example Store',
+        sku: 'SHOE-BLK-42',
+        variantDescription: [{ name: 'Size', value: '42' }],
+        quantity: 2,
+        unitPriceMinor: 62500,
+        lineTotalMinor: 125000,
+        currency: 'NGN',
+      }],
+    }));
+
+    expect(database.query).toHaveBeenCalledTimes(3);
+    expect(database.query.mock.calls[0]?.[1]).toEqual(['user-id']);
+    expect(database.query.mock.calls[1]?.[1]).toEqual(['seller-id', 'order-id']);
+
+    const itemsQuery = database.query.mock.calls[2]?.[0] ?? '';
+    expect(itemsQuery).toContain('FROM marketplace_order_items');
+    expect(itemsQuery).toContain('WHERE order_id = $1');
+    expect(itemsQuery).toContain('AND seller_id = $2');
+    expect(database.query.mock.calls[2]?.[1]).toEqual(['order-id', 'seller-id']);
+  });
+
+  it('does not retrieve items when the order does not belong to the seller', async () => {
+    database.query
+      .mockResolvedValueOnce({
+        rows: [{ id: 'seller-id' }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
+        rows: [],
+        rowCount: 0,
+      });
+
+    await expect(
+      service.getSellerOrder('user-id', 'another-order-id'),
+    ).rejects.toThrow('Seller order not found');
+
+    expect(database.query).toHaveBeenCalledTimes(2);
+    expect(database.query.mock.calls[1]?.[1]).toEqual([
+      'seller-id',
+      'another-order-id',
+    ]);
+  });
+
   it('lists orders containing the authenticated seller items', async () => {
     database.query
       .mockResolvedValueOnce({

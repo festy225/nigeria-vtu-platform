@@ -98,6 +98,15 @@ export class SellerController {
     return this.sellers.listSellerOrders(user.id);
   }
 
+  @Get('orders/:id')
+  @RequiresFeature('SELLER_STORES_ENABLED')
+  getSellerOrder(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', new ParseUUIDPipe()) orderId: string,
+  ) {
+    return this.sellers.getSellerOrder(user.id, orderId);
+  }
+
   @Get('products')
   @RequiresFeature('SELLER_STORES_ENABLED')
   listSellerProducts(@CurrentUser() user: AuthenticatedUser) {
