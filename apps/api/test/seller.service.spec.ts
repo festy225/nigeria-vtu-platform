@@ -547,6 +547,7 @@ describe('SellerService membership eligibility', () => {
 
     const listQuery = database.query.mock.calls[1]?.[0] ?? '';
     expect(listQuery).toContain('FROM marketplace_orders o');
+    expect(listQuery).toContain('AS seller_total_minor');
     expect(listQuery).toContain('JOIN marketplace_order_items item');
     expect(listQuery).toContain('item.seller_id = $1');
     expect(database.query.mock.calls[1]?.[1]).toEqual(['seller-id']);
