@@ -4,6 +4,7 @@ import { MarketplaceFulfillmentService } from '../src/modules/marketplace-fulfil
 describe('MarketplaceFulfillmentController', () => {
   const fulfillment = {
     createSellerFulfillment: jest.fn(),
+    getSellerFulfillment: jest.fn(),
     checkSellerFulfillmentServiceability: jest.fn(),
     findSellerFulfillmentOffices: jest.fn(),
     selectSellerFulfillmentOffice: jest.fn(),
@@ -14,6 +15,35 @@ describe('MarketplaceFulfillmentController', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+
+
+  describe('getSellerFulfillment', () => {
+    it('uses the authenticated user id and order id', async () => {
+      const fulfillmentResult = {
+        id: 'fulfillment-1',
+        order_id: 'order-1',
+        seller_id: 'seller-1',
+        selected_office_id: 'office-1',
+        items: [],
+      };
+
+      fulfillment.getSellerFulfillment.mockResolvedValue(
+        fulfillmentResult as never,
+      );
+
+      const result = await controller.getSellerFulfillment(
+        { id: 'user-1' } as any,
+        'order-1',
+      );
+
+      expect(fulfillment.getSellerFulfillment).toHaveBeenCalledWith(
+        'order-1',
+        'user-1',
+      );
+      expect(result).toEqual(fulfillmentResult);
+    });
   });
 
 

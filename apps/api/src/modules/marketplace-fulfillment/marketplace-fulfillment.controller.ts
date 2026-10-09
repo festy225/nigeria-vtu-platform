@@ -50,6 +50,15 @@ export class MarketplaceFulfillmentController {
     );
   }
 
+  @Get(':orderId')
+  @RequiresFeature('MARKETPLACE_DELIVERY_ENABLED')
+  getSellerFulfillment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId') orderId: string,
+  ) {
+    return this.fulfillment.getSellerFulfillment(orderId, user.id);
+  }
+
   @Get(':orderId/offices')
   @RequiresFeature('MARKETPLACE_DELIVERY_ENABLED')
   findSellerFulfillmentOffices(

@@ -37,6 +37,96 @@ describe('MarketplaceFulfillmentService', () => {
     );
   });
 
+  describe('getSellerFulfillment', () => {
+    it('returns fulfillment details, selected office, and items for the authenticated seller', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+
+      const fulfillmentRow = {
+        id: 'fulfillment-1',
+        order_id: 'order-1',
+        seller_id: 'seller-1',
+        status: 'READY_FOR_FULFILLMENT',
+        provider_configuration_id: 'provider-config-1',
+        tracking_reference: null,
+        origin_snapshot: { city: 'Lagos' },
+        destination_snapshot: { city: 'Abuja' },
+        selected_office_id: 'office-1',
+        selected_office_snapshot: {
+          providerOfficeId: 'office-1',
+          name: 'Lagos Pickup Office',
+          address: {
+            addressLine1: '1 Test Street',
+            city: 'Lagos',
+            countryCode: 'NG',
+          },
+          pickupAvailable: true,
+          deliveryAvailable: true,
+        },
+        created_at: new Date('2026-01-01T00:00:00.000Z'),
+        updated_at: new Date('2026-01-02T00:00:00.000Z'),
+      };
+
+      database.query
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [fulfillmentRow],
+        })
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [
+            {
+              id: 'fulfillment-item-1',
+              order_item_id: 'order-item-1',
+              quantity: 2,
+            },
+          ],
+        });
+
+      const result = await service.getSellerFulfillment(
+        'order-1',
+        'user-1',
+      );
+
+      expect(sellers.getSellerIdByUserId).toHaveBeenCalledWith('user-1');
+      expect(database.query).toHaveBeenNthCalledWith(
+        1,
+        expect.stringContaining('AND seller_id = $2'),
+        ['order-1', 'seller-1'],
+      );
+      expect(database.query).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining(
+          'WHERE fulfillment_id = $1',
+        ),
+        ['fulfillment-1'],
+      );
+      expect(result).toEqual({
+        ...fulfillmentRow,
+        items: [
+          {
+            id: 'fulfillment-item-1',
+            order_item_id: 'order-item-1',
+            quantity: 2,
+          },
+        ],
+      });
+    });
+
+    it('throws NotFoundException when the seller has no fulfillment for the order', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+      database.query.mockResolvedValueOnce({
+        rowCount: 0,
+        rows: [],
+      });
+
+      await expect(
+        service.getSellerFulfillment('missing-order', 'user-1'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      expect(database.query).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('findSellerFulfillmentOffices', () => {
     it('finds nearby offices using the fulfillment snapshots and configured logistics provider', async () => {
       sellers.getSellerIdByUserId.mockResolvedValue('seller-1');

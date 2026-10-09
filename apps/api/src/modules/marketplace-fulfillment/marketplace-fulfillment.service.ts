@@ -733,8 +733,10 @@ export class MarketplaceFulfillmentService {
 
   async getSellerFulfillment(
     orderId: string,
-    sellerId: string,
+    userId: string,
   ) {
+    const sellerId = await this.sellers.getSellerIdByUserId(userId);
+
     const fulfillment = await this.database.query<{
       id: string;
       order_id: string;
@@ -744,6 +746,26 @@ export class MarketplaceFulfillmentService {
       tracking_reference: string | null;
       origin_snapshot: unknown;
       destination_snapshot: unknown;
+      selected_office_id: string | null;
+      selected_office_snapshot: {
+        providerOfficeId: string;
+        name: string;
+        address: {
+          addressLine1: string;
+          addressLine2?: string | null;
+          city: string;
+          stateProvince?: string | null;
+          postalCode?: string | null;
+          countryCode: string;
+          latitude?: number | null;
+          longitude?: number | null;
+        };
+        distanceKm?: number | null;
+        phone?: string | null;
+        pickupAvailable: boolean;
+        deliveryAvailable: boolean;
+        metadata?: Record<string, unknown>;
+      } | null;
       created_at: Date;
       updated_at: Date;
     }>(
@@ -757,6 +779,8 @@ export class MarketplaceFulfillmentService {
           tracking_reference,
           origin_snapshot,
           destination_snapshot,
+          selected_office_id,
+          selected_office_snapshot,
           created_at,
           updated_at
         FROM marketplace_fulfillments
