@@ -18,6 +18,7 @@ import { KycModule } from './modules/kyc/kyc.module';
 import { MarketplaceOrderModule } from './modules/marketplace-orders/marketplace-order.module';
 import { MarketplaceCartModule } from './modules/marketplace-cart/marketplace-cart.module';
 import { MarketplaceFulfillmentModule } from './modules/marketplace-fulfillment/marketplace-fulfillment.module';
+import { MarketplaceCustomerAddressesModule } from './modules/marketplace-customer-addresses/marketplace-customer-addresses.module';
 
 @Global()
 @Module({
@@ -41,6 +42,7 @@ import { MarketplaceFulfillmentModule } from './modules/marketplace-fulfillment/
     MarketplaceOrderModule,
     MarketplaceCartModule,
     MarketplaceFulfillmentModule,
+    MarketplaceCustomerAddressesModule,
   ],
   providers: []})
 export class AppModule {}
