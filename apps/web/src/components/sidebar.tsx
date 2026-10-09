@@ -32,11 +32,21 @@ const links = [
     href: '/dashboard/account',
     icon: '○',
   },
-  {
+   {
     label: 'Admin workspace',
     href: '/dashboard/admin',
     icon: '◆',
     roles: ['ADMIN', 'SUPER_ADMIN'],
+  },
+  {
+    label: 'Seller Account',
+    href: '/dashboard/business/seller',
+    icon: '▣',
+  },
+  {
+    label: 'My Orders',
+    href: '/dashboard/business/seller/orders',
+    icon: '▤',
   },
 ];
 

@@ -94,6 +94,37 @@ export interface SellerApplication {
   created_at: string;
   updated_at: string;
 }
+export interface SellerOrderItem {
+  id: string;
+  productId: string;
+  variantId: string | null;
+  productName: string;
+  productDescription: string;
+  sellerName: string;
+  sku: string | null;
+  variantDescription: unknown;
+  quantity: number;
+  unitPriceMinor: number;
+  lineTotalMinor: number;
+  currency: CurrencyCode;
+}
+
+export interface SellerOrder {
+  id: string;
+  orderNumber: string;
+  status: string;
+  currency: CurrencyCode;
+  subtotalMinor: number;
+  totalMinor: number;
+  itemCount: number;
+  sellerTotalMinor: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SellerOrderDetail extends SellerOrder {
+  items: SellerOrderItem[];
+}
 
 export interface MarketplaceCatalogVariant {
   id: string;
@@ -308,6 +339,13 @@ passwordResetConfirm: (token: string, password: string) =>
   getSellerApplications: () =>
     authenticatedFetch<SellerApplication[]>('/sellers/applications'),
 
+  getSellerOrders: () =>
+    authenticatedFetch<SellerOrder[]>('/sellers/orders'),
+
+  getSellerOrder: (orderId: string) =>
+    authenticatedFetch<SellerOrderDetail>(
+      `/sellers/orders/${encodeURIComponent(orderId)}`,
+    ),
   marketplaceProducts: () =>
     fetchJson<MarketplaceProduct[]>('/marketplace/products'),
 
