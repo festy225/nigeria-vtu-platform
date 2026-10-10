@@ -111,9 +111,8 @@ describe('MarketplaceCartService', () => {
       'settled-order-id',
     );
 
-    expect(client.query.mock.calls[0]?.[0]).toContain(
-      'WHERE user_id = $1',
-    );
+    expect(client.query).toHaveBeenCalledTimes(3);
+    expect(client.query.mock.calls[0]?.[0]).toContain('WHERE user_id = $1');
     expect(client.query.mock.calls[0]?.[0]).toContain('FOR UPDATE');
     expect(client.query.mock.calls[0]?.[1]).toEqual([
       'authenticated-user-id',
@@ -133,30 +132,50 @@ describe('MarketplaceCartService', () => {
       'authenticated-user-id',
       'settled-order-id',
     ]);
-    expect(client.query.mock.calls).toHaveLength(3);
   });
 
-  it('does not delete items again when finalizing an already finalized order', async () => {
+  it('unlocks the cart after failed payment without deleting cart items', async () => {
     client.query
       .mockResolvedValueOnce({
-        rows: [{ id: 'owned-cart-id', pending_order_id: null }],
+        rows: [{
+          id: 'owned-cart-id',
+          pending_order_id: 'failed-order-id',
+        }],
       })
       .mockResolvedValueOnce({
-        rows: [{ id: 'owned-cart-id', pending_order_id: null }],
+        rows: [{ id: 'owned-cart-id' }],
       });
 
-    await service.finalizePendingOrderCart(
+    await service.releasePendingOrderCart(
       client as never,
       'authenticated-user-id',
-      'settled-order-id',
-    );
-    await service.finalizePendingOrderCart(
-      client as never,
-      'authenticated-user-id',
-      'settled-order-id',
+      'failed-order-id',
     );
 
     expect(client.query).toHaveBeenCalledTimes(2);
+    expect(client.query.mock.calls[0]?.[0]).toContain('WHERE user_id = $1');
+    expect(client.query.mock.calls[0]?.[0]).toContain('FOR UPDATE');
+    expect(client.query.mock.calls[0]?.[1]).toEqual([
+      'authenticated-user-id',
+    ]);
+    expect(client.query.mock.calls[1]?.[0]).toContain(
+      'SET pending_order_id = NULL',
+    );
+    expect(client.query.mock.calls[1]?.[0]).toContain('WHERE id = $1');
+    expect(client.query.mock.calls[1]?.[0]).toContain('AND user_id = $2');
+    expect(client.query.mock.calls[1]?.[0]).toContain(
+      'AND pending_order_id = $3',
+    );
+    expect(client.query.mock.calls[1]?.[1]).toEqual([
+      'owned-cart-id',
+      'authenticated-user-id',
+      'failed-order-id',
+    ]);
+    expect(
+      client.query.mock.calls.some(([query]) =>
+        String(query).includes('DELETE FROM marketplace_cart_items'),
+      ),
+    ).toBe(false);
   });
 
   it('rejects a cart linked to a different order without changing it', async () => {
@@ -177,28 +196,32 @@ describe('MarketplaceCartService', () => {
     expect(client.query).toHaveBeenCalledTimes(1);
   });
 
-  it('does not clear unrelated items when the owned cart has no pending order', async () => {
+  it('rejects finalization when the owned cart has no pending order', async () => {
     client.query.mockResolvedValueOnce({
       rows: [{ id: 'owned-cart-id', pending_order_id: null }],
     });
 
-    await service.finalizePendingOrderCart(
-      client as never,
-      'authenticated-user-id',
-      'settled-order-id',
-    );
+    await expect(
+      service.finalizePendingOrderCart(
+        client as never,
+        'authenticated-user-id',
+        'settled-order-id',
+      ),
+    ).rejects.toThrow(ConflictException);
 
     expect(client.query).toHaveBeenCalledTimes(1);
   });
 
-  it('does nothing when the authenticated customer has no cart', async () => {
+  it('rejects finalization when the authenticated customer has no cart', async () => {
     client.query.mockResolvedValueOnce({ rows: [] });
 
-    await service.finalizePendingOrderCart(
-      client as never,
-      'authenticated-user-id',
-      'settled-order-id',
-    );
+    await expect(
+      service.finalizePendingOrderCart(
+        client as never,
+        'authenticated-user-id',
+        'settled-order-id',
+      ),
+    ).rejects.toThrow(ConflictException);
 
     expect(client.query.mock.calls[0]?.[1]).toEqual([
       'authenticated-user-id',

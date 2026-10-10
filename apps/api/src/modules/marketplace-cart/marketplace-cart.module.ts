@@ -8,5 +8,6 @@ import { MarketplaceCartService } from './marketplace-cart.service';
   imports: [MarketplaceOrderModule],
   controllers: [MarketplaceCartController],
   providers: [MarketplaceCartService, FeatureGuard],
+  exports: [MarketplaceCartService],
 })
 export class MarketplaceCartModule {}

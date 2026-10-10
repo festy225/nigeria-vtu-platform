@@ -46,11 +46,24 @@ describe('PaymentService membership payments', () => {
   };
   const config = { get: jest.fn() };
   const walletService = { creditWithClient: jest.fn() };
+  const marketplaceOrderService = {
+  consumeInventoryReservation: jest.fn(),
+  releaseInventoryReservation: jest.fn(),
+  placePendingPaymentOrder: jest.fn(),
+  cancelPendingPaymentOrder: jest.fn(),
+};
+
+const marketplaceCartService = {
+  finalizePendingOrderCart: jest.fn(),
+  releasePendingOrderCart: jest.fn(),
+};
   const service = new PaymentService(
     db as never,
     providers as never,
     config as never,
     walletService as never,
+    marketplaceOrderService as never,
+    marketplaceCartService as never,
   );
 
   const validRequest = {
@@ -883,7 +896,7 @@ describe('PaymentService membership payments', () => {
 
     const result = await service.completeFromWebhook(webhookPayload());
 
-    expect(result.status).toBe('FAILED');
+    expect(result?.status).toBe('FAILED');
     expect(client.query).toHaveBeenCalledTimes(2);
     expect((client.query.mock.calls as QueryCall[]).some(([query]) =>
       String(query).includes('business_membership_entitlements'),
@@ -891,7 +904,265 @@ describe('PaymentService membership payments', () => {
     expect(walletService.creditWithClient).not.toHaveBeenCalled();
   });
 
-  it('does not settle marketplace payments through the existing webhook path', async () => {
+  it('settles a successful marketplace payment exactly once', async () => {
+    configureWebhook('SUCCESS');
+
+    const payment = {
+      ...webhookPayment('PENDING', 'MARKETPLACE_ORDER'),
+      marketplace_order_id: 'marketplace-order-id',
+      payment_amount_minor: '12000',
+      payment_currency: 'USD',
+    };
+
+    client.query
+      .mockResolvedValueOnce({ rows: [payment] })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'marketplace-order-id',
+          customer_id: 'user-id',
+          status: 'PENDING_PAYMENT',
+          total_minor: '12000',
+          currency: 'USD',
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ id: 'item-1' }, { id: 'item-2' }],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const result = await service.completeFromWebhook(webhookPayload());
+
+    expect(result).toMatchObject({
+      status: 'SUCCESSFUL',
+      paymentReference: 'PAY-membership',
+      alreadyProcessed: false,
+    });
+
+    expect(
+      marketplaceOrderService.consumeInventoryReservation,
+    ).toHaveBeenNthCalledWith(1, client, 'marketplace-order-id', 'item-1');
+    expect(
+      marketplaceOrderService.consumeInventoryReservation,
+    ).toHaveBeenNthCalledWith(2, client, 'marketplace-order-id', 'item-2');
+    expect(
+      marketplaceOrderService.placePendingPaymentOrder,
+    ).toHaveBeenCalledWith(client, 'marketplace-order-id');
+    expect(
+      marketplaceCartService.finalizePendingOrderCart,
+    ).toHaveBeenCalledWith(client, 'user-id', 'marketplace-order-id');
+
+    const queryCalls = client.query.mock.calls as QueryCall[];
+    const paymentUpdate = queryCalls.find(([query]) =>
+      String(query).includes("SET state='SUCCESSFUL'"),
+    );
+
+    expect(paymentUpdate?.[1]).toEqual([
+      'provider-ref',
+      JSON.stringify({ eventId: 'event-id' }),
+      'payment-id',
+    ]);
+    expect(walletService.creditWithClient).not.toHaveBeenCalled();
+  });
+
+  it('rejects a late successful webhook for a failed marketplace payment', async () => {
+    configureWebhook('SUCCESS');
+
+    client.query.mockResolvedValueOnce({
+      rows: [
+        {
+          ...webhookPayment('FAILED', 'MARKETPLACE_ORDER'),
+          marketplace_order_id: 'marketplace-order-id',
+        },
+      ],
+    });
+
+    await expect(
+      service.completeFromWebhook(webhookPayload()),
+    ).rejects.toThrow(
+      'A failed marketplace payment cannot be settled as successful',
+    );
+
+    // A late success must not process the cancelled order.
+    expect(client.query).toHaveBeenCalledTimes(1);
+
+    expect(
+      marketplaceOrderService.consumeInventoryReservation,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      marketplaceOrderService.placePendingPaymentOrder,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      marketplaceCartService.finalizePendingOrderCart,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('does not settle inventory or finalize the cart for a repeated successful marketplace webhook', async () => {
+    configureWebhook('SUCCESS');
+
+    client.query.mockResolvedValueOnce({
+      rows: [{
+        ...webhookPayment('SUCCESSFUL', 'MARKETPLACE_ORDER'),
+        marketplace_order_id: 'marketplace-order-id',
+      }],
+    });
+
+    const result = await service.completeFromWebhook(webhookPayload());
+
+    expect(result).toMatchObject({
+      status: 'SUCCESSFUL',
+      paymentReference: 'PAY-membership',
+      alreadyProcessed: true,
+    });
+    expect(client.query).toHaveBeenCalledTimes(1);
+    expect(
+      marketplaceOrderService.consumeInventoryReservation,
+    ).not.toHaveBeenCalled();
+    expect(
+      marketplaceOrderService.placePendingPaymentOrder,
+    ).not.toHaveBeenCalled();
+    expect(
+      marketplaceCartService.finalizePendingOrderCart,
+    ).not.toHaveBeenCalled();
+    expect(walletService.creditWithClient).not.toHaveBeenCalled();
+  });
+
+  it('does not complete payment settlement when inventory consumption fails', async () => {
+    configureWebhook('SUCCESS');
+
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          ...webhookPayment('PENDING', 'MARKETPLACE_ORDER'),
+          marketplace_order_id: 'marketplace-order-id',
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'marketplace-order-id',
+          customer_id: 'user-id',
+          status: 'PENDING_PAYMENT',
+          total_minor: '12000',
+          currency: 'USD',
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ id: 'item-1' }, { id: 'item-2' }],
+      });
+
+    marketplaceOrderService.consumeInventoryReservation
+      .mockRejectedValueOnce(new ConflictException('Inventory reservation unavailable'));
+
+    await expect(
+      service.completeFromWebhook(webhookPayload()),
+    ).rejects.toThrow('Inventory reservation unavailable');
+
+    expect(
+      marketplaceOrderService.consumeInventoryReservation,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      marketplaceOrderService.placePendingPaymentOrder,
+    ).not.toHaveBeenCalled();
+    expect(
+      marketplaceCartService.finalizePendingOrderCart,
+    ).not.toHaveBeenCalled();
+
+    const queryCalls = client.query.mock.calls as QueryCall[];
+    expect(
+      queryCalls.some(([query]) =>
+        String(query).includes("SET state='SUCCESSFUL'"),
+      ),
+    ).toBe(false);
+    expect(walletService.creditWithClient).not.toHaveBeenCalled();
+  });
+
+  it('rejects marketplace settlement when the order amount or currency differs', async () => {
+    configureWebhook('SUCCESS');
+
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          ...webhookPayment('PENDING', 'MARKETPLACE_ORDER'),
+          marketplace_order_id: 'marketplace-order-id',
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'marketplace-order-id',
+          customer_id: 'user-id',
+          status: 'PENDING_PAYMENT',
+          total_minor: '11999',
+          currency: 'USD',
+        }],
+      });
+
+    await expect(
+      service.completeFromWebhook(webhookPayload()),
+    ).rejects.toThrow(ConflictException);
+
+    expect(
+      marketplaceOrderService.consumeInventoryReservation,
+    ).not.toHaveBeenCalled();
+    expect(
+      marketplaceOrderService.placePendingPaymentOrder,
+    ).not.toHaveBeenCalled();
+    expect(
+      marketplaceCartService.finalizePendingOrderCart,
+    ).not.toHaveBeenCalled();
+
+    const queryCalls = client.query.mock.calls as QueryCall[];
+    expect(
+      queryCalls.some(([query]) =>
+        String(query).includes("SET state='SUCCESSFUL'"),
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects marketplace settlement when the order has no items', async () => {
+    configureWebhook('SUCCESS');
+
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          ...webhookPayment('PENDING', 'MARKETPLACE_ORDER'),
+          marketplace_order_id: 'marketplace-order-id',
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'marketplace-order-id',
+          customer_id: 'user-id',
+          status: 'PENDING_PAYMENT',
+          total_minor: '12000',
+          currency: 'USD',
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await expect(
+      service.completeFromWebhook(webhookPayload()),
+    ).rejects.toThrow(ConflictException);
+
+    expect(
+      marketplaceOrderService.consumeInventoryReservation,
+    ).not.toHaveBeenCalled();
+    expect(
+      marketplaceOrderService.placePendingPaymentOrder,
+    ).not.toHaveBeenCalled();
+    expect(
+      marketplaceCartService.finalizePendingOrderCart,
+    ).not.toHaveBeenCalled();
+
+    const queryCalls = client.query.mock.calls as QueryCall[];
+    expect(
+      queryCalls.some(([query]) =>
+        String(query).includes("SET state='SUCCESSFUL'"),
+      ),
+    ).toBe(false);
+  });
+
+  it('uses the pinned provider configuration and rejects marketplace payments without order linkage', async () => {
     configureWebhook('SUCCESS');
     client.query.mockResolvedValueOnce({
       rows: [webhookPayment('PENDING', 'MARKETPLACE_ORDER')],
@@ -901,7 +1172,7 @@ describe('PaymentService membership payments', () => {
       service.completeFromWebhook(
         webhookPayload({ providerName: 'attacker-selected-provider' }),
       ),
-    ).rejects.toThrow(ServiceUnavailableException);
+    ).rejects.toThrow('Marketplace order not found');
 
     expect(client.query).toHaveBeenCalledTimes(1);
     expect(
@@ -988,7 +1259,7 @@ describe('PaymentService membership payments', () => {
 
     const result = await service.completeFromWebhook(webhookPayload());
 
-    expect(result.status).toBe('SUCCESSFUL');
+    expect(result?.status).toBe('SUCCESSFUL');
     expect(walletService.creditWithClient).toHaveBeenCalledTimes(1);
     expect((client.query.mock.calls as QueryCall[]).some(([query]) =>
       String(query).includes('business_membership_entitlements'),

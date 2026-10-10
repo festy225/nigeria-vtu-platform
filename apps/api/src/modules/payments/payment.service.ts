@@ -12,6 +12,8 @@ import type {
 import type { CreateMarketplacePaymentDto } from './dto/create-marketplace-payment.dto';
 import type { FundWalletDto } from './dto/fund-wallet.dto';
 import { WalletService } from '../wallets/wallet.service';
+import { MarketplaceOrderService } from '../marketplace-orders/marketplace-order.service';
+import { MarketplaceCartService } from '../marketplace-cart/marketplace-cart.service';
 
 type PaymentPurpose =
   | 'WALLET_FUNDING'
@@ -80,6 +82,7 @@ interface PaymentSettlementRow {
   payment_provider_name: string | null;
   payment_provider_reference: string | null;
   deposit_id: string | null;
+  marketplace_order_id: string | null;
 }
 
 interface MarketplaceOrderPaymentSource {
@@ -125,6 +128,8 @@ export class PaymentService {
     private readonly providers: PaymentProviderRouterService,
     private readonly config: ConfigService,
     private readonly walletService: WalletService,
+    private readonly marketplaceOrderService: MarketplaceOrderService,
+    private readonly marketplaceCartService: MarketplaceCartService,
   ) {}
 
   async createFundingIntent(userId: string, customerEmail: string | null, request: FundWalletDto) {
@@ -681,7 +686,8 @@ if (response.status !== 'PENDING') {
            provider_configuration_id,
            provider_name payment_provider_name,
            provider_reference payment_provider_reference,
-           deposit_id
+           deposit_id,
+           marketplace_order_id
          FROM payments
          WHERE reference = $1
          FOR UPDATE`,
@@ -764,12 +770,6 @@ if (response.status !== 'PENDING') {
         throw new ConflictException('Payment provider does not match');
       }
 
-      if (payment.payment_purpose === 'MARKETPLACE_ORDER') {
-        throw new ServiceUnavailableException(
-          'Marketplace payment settlement is not available',
-        );
-      }
-
       if (payment.payment_state === 'SUCCESSFUL') {
         if (
           event.status === 'SUCCESS' &&
@@ -784,7 +784,17 @@ if (response.status !== 'PENDING') {
         };
       }
 
-      let deposit: DepositSettlementRow | undefined;
+  if (
+      payment.payment_purpose === 'MARKETPLACE_ORDER' &&
+      payment.payment_state === 'FAILED' &&
+      event.status === 'SUCCESS'
+    ) {
+      throw new ConflictException(
+        'A failed marketplace payment cannot be settled as successful; reconcile any late provider charge separately',
+      );
+    }
+
+        let deposit: DepositSettlementRow | undefined;
       if (payment.payment_purpose === 'WALLET_FUNDING') {
         if (!payment.deposit_id) {
           throw new NotFoundException('Payment not found');
@@ -803,6 +813,63 @@ if (response.status !== 'PENDING') {
       }
 
       if (event.status === 'FAILED') {
+        if (payment.payment_purpose === 'MARKETPLACE_ORDER') {
+          if (payment.payment_state === 'FAILED') {
+            return {
+              status: 'FAILED',
+              paymentReference: payment.payment_reference,
+              alreadyProcessed: true,
+            };
+          }
+
+          if (!payment.marketplace_order_id) {
+            throw new ConflictException(
+              'Marketplace payment is missing its associated order',
+            );
+          }
+
+          const order = await this.lockMarketplaceOrder(
+            client,
+            payment.payment_user_id,
+            payment.marketplace_order_id,
+          );
+
+          this.validateMarketplaceOrderForPayment(order);
+
+          const itemsResult = await client.query<{ id: string }>(
+            `SELECT id
+             FROM marketplace_order_items
+             WHERE order_id = $1
+             ORDER BY id`,
+            [order.id],
+          );
+
+          if (itemsResult.rows.length === 0) {
+            throw new ConflictException(
+              'Marketplace order has no items to release',
+            );
+          }
+
+          for (const item of itemsResult.rows) {
+            await this.marketplaceOrderService.releaseInventoryReservation(
+              client,
+              order.id,
+              item.id,
+            );
+          }
+
+          await this.marketplaceOrderService.cancelPendingPaymentOrder(
+            client,
+            order.id,
+          );
+
+          await this.marketplaceCartService.releasePendingOrderCart(
+            client,
+            payment.payment_user_id,
+            order.id,
+          );
+        }
+
         await client.query(
           `UPDATE payments
            SET state='FAILED',
@@ -832,6 +899,82 @@ if (response.status !== 'PENDING') {
       if (event.status !== 'SUCCESS') {
         return {
           status: 'PENDING',
+          paymentReference: payment.payment_reference,
+          alreadyProcessed: false,
+        };
+      }
+
+      if (payment.payment_purpose === 'MARKETPLACE_ORDER') {
+        if (!payment.marketplace_order_id) {
+          throw new NotFoundException('Marketplace order not found');
+        }
+
+        const order = await this.lockMarketplaceOrder(
+          client,
+          payment.payment_user_id,
+          payment.marketplace_order_id,
+        );
+        this.validateMarketplaceOrderForPayment(order);
+
+        const orderAmountMinor = Number(order.total_minor);
+        if (
+          !Number.isSafeInteger(orderAmountMinor) ||
+          orderAmountMinor !== Number(payment.payment_amount_minor) ||
+          order.currency !== payment.payment_currency
+        ) {
+          throw new ConflictException(
+            'Marketplace order amount or currency does not match payment',
+          );
+        }
+
+        const itemsResult = await client.query<{ id: string }>(
+          `SELECT id
+           FROM marketplace_order_items
+           WHERE order_id = $1
+           ORDER BY id`,
+          [order.id],
+        );
+
+        if (itemsResult.rows.length === 0) {
+          throw new ConflictException(
+            'Marketplace order has no items to settle',
+          );
+        }
+
+        for (const item of itemsResult.rows) {
+          await this.marketplaceOrderService.consumeInventoryReservation(
+            client,
+            order.id,
+            item.id,
+          );
+        }
+
+        await this.marketplaceOrderService.placePendingPaymentOrder(
+          client,
+          order.id,
+        );
+        await this.marketplaceCartService.finalizePendingOrderCart(
+          client,
+          payment.payment_user_id,
+          order.id,
+        );
+
+        await client.query(
+          `UPDATE payments
+           SET state='SUCCESSFUL',
+               provider_reference=$1,
+               provider_status='SUCCESS',
+               provider_metadata=$2
+           WHERE id=$3`,
+          [
+            event.providerReference,
+            JSON.stringify(event.rawPayload),
+            payment.payment_id,
+          ],
+        );
+
+        return {
+          status: 'SUCCESSFUL',
           paymentReference: payment.payment_reference,
           alreadyProcessed: false,
         };
