@@ -1,7 +1,8 @@
 import {
   IsBoolean,
-  IsLatitude,
-  IsLongitude,
+  IsNumber,
+  Max,
+  Min,
   IsOptional,
   IsString,
   Length,
@@ -55,11 +56,15 @@ export class UpdateCustomerAddressDto {
   countryCode?: string;
 
   @IsOptional()
-  @IsLatitude()
+  @IsNumber({ allowNaN: false, allowInfinity: false })
+  @Min(-90)
+  @Max(90)
   latitude?: number;
 
   @IsOptional()
-  @IsLongitude()
+  @IsNumber({ allowNaN: false, allowInfinity: false })
+  @Min(-180)
+  @Max(180)
   longitude?: number;
 
   @IsOptional()
