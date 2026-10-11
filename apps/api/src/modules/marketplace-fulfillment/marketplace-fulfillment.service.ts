@@ -731,6 +731,291 @@ export class MarketplaceFulfillmentService {
     });
   }
 
+  async trackSellerFulfillment(orderId: string, userId: string) {
+    const sellerId = await this.sellers.getSellerIdByUserId(userId);
+
+    const result = await this.database.query(
+      `SELECT id, order_id, status, provider_configuration_id,
+              tracking_reference
+       FROM marketplace_fulfillments
+       WHERE order_id = $1 AND seller_id = $2
+       LIMIT 1`,
+      [orderId, sellerId],
+    );
+
+    const fulfillment = result.rows[0];
+    if (!fulfillment) {
+      throw new NotFoundException('Fulfillment not found for this seller');
+    }
+
+    if (fulfillment.status === 'CANCELLED') {
+      throw new ConflictException('Cancelled shipments cannot be tracked');
+    }
+
+    if (
+      fulfillment.status === 'DELIVERED' ||
+      fulfillment.status === 'FAILED'
+    ) {
+      throw new ConflictException(
+        'Tracking is unavailable for a terminal fulfillment',
+      );
+    }
+
+    if (
+      !fulfillment.provider_configuration_id ||
+      !fulfillment.tracking_reference
+    ) {
+      throw new ConflictException(
+        'Shipment must be booked before tracking is available',
+      );
+    }
+
+    const registration =
+      await this.logistics.getProviderRegistrationByConfigurationId(
+        fulfillment.provider_configuration_id,
+      );
+
+    const tracking = await registration.provider.trackShipment({
+      trackingReference: fulfillment.tracking_reference,
+    });
+
+    const allowedStatuses = new Set([
+      'BOOKED',
+      'PICKED_UP',
+      'IN_TRANSIT',
+      'OUT_FOR_DELIVERY',
+      'DELIVERED',
+      'FAILED',
+      'RETURNED',
+      'UNKNOWN',
+    ]);
+
+    const validEvents = tracking.events
+      .filter(
+        (event) =>
+          allowedStatuses.has(event.status) &&
+          Number.isFinite(Date.parse(event.occurredAt)),
+      )
+      .sort(
+        (a, b) =>
+          Date.parse(a.occurredAt) - Date.parse(b.occurredAt),
+      );
+
+    const statusFromEvent: Record<string, string | null> = {
+      BOOKED: 'BOOKED',
+      PICKED_UP: 'PICKED_UP',
+      IN_TRANSIT: 'IN_TRANSIT',
+      OUT_FOR_DELIVERY: 'IN_TRANSIT',
+      DELIVERED: 'DELIVERED',
+      FAILED: 'FAILED',
+      RETURNED: null,
+      UNKNOWN: null,
+    };
+
+    // Only the newest valid event may determine a status transition.
+    // Do not fall back to an older event when the newest maps to null.
+    const newestEvent = validEvents[validEvents.length - 1];
+    const nextStatus = newestEvent
+      ? statusFromEvent[newestEvent.status]
+      : null;
+
+    let skippedStatus: string | null | undefined = undefined;
+
+    await this.database.withTransaction(async (client) => {
+      // Lock and re-read the current status after the provider request.
+      // Cancellation or another terminal transition may have happened
+      // while the external tracking request was in flight.
+      const locked = await client.query<{ status: string }>(
+        `SELECT status
+         FROM marketplace_fulfillments
+         WHERE id = $1
+         FOR UPDATE`,
+        [fulfillment.id],
+      );
+
+      const currentStatus = locked.rows[0]?.status;
+
+      if (
+        !currentStatus ||
+        ['CANCELLED', 'DELIVERED', 'FAILED'].includes(currentStatus)
+      ) {
+        skippedStatus = currentStatus ?? null;
+        return;
+      }
+
+      for (const event of validEvents) {
+        await client.query(
+          `INSERT INTO marketplace_fulfillment_tracking_events
+             (fulfillment_id, provider_event_id, status, provider_status,
+              description, location, occurred_at, metadata, raw_payload)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb)
+           ON CONFLICT (fulfillment_id, provider_event_id)
+             WHERE provider_event_id IS NOT NULL DO NOTHING`,
+          [
+            fulfillment.id,
+            event.providerEventId ?? null,
+            event.status,
+            event.providerStatus ?? null,
+            event.description ?? null,
+            event.location ?? null,
+            event.occurredAt,
+            JSON.stringify(event.metadata ?? {}),
+            JSON.stringify(tracking.rawPayload ?? null),
+          ],
+        );
+      }
+
+      if (!nextStatus) {
+        return;
+      }
+
+      await client.query(
+        `UPDATE marketplace_fulfillments
+         SET status = $2::marketplace_fulfillment_status,
+             updated_at = now()
+         WHERE id = $1
+           AND status NOT IN (
+             'CANCELLED', 'DELIVERED', 'FAILED'
+           )
+           AND CASE status
+             WHEN 'PENDING' THEN 0
+             WHEN 'READY_FOR_FULFILLMENT' THEN 1
+             WHEN 'BOOKED' THEN 2
+             WHEN 'PICKED_UP' THEN 3
+             WHEN 'IN_TRANSIT' THEN 4
+             ELSE 0
+           END
+           < CASE $2::marketplace_fulfillment_status
+             WHEN 'PENDING' THEN 0
+             WHEN 'READY_FOR_FULFILLMENT' THEN 1
+             WHEN 'BOOKED' THEN 2
+             WHEN 'PICKED_UP' THEN 3
+             WHEN 'IN_TRANSIT' THEN 4
+             WHEN 'DELIVERED' THEN 5
+             WHEN 'FAILED' THEN 5
+             ELSE 0
+           END`,
+        [fulfillment.id, nextStatus],
+      );
+    });
+
+    if (skippedStatus !== undefined) {
+      if (skippedStatus === null) {
+        throw new NotFoundException('Fulfillment not found for this seller');
+      }
+
+      if (skippedStatus === 'CANCELLED') {
+        throw new ConflictException('Cancelled shipments cannot be tracked');
+      }
+
+      throw new ConflictException(
+        'Tracking is unavailable for a terminal fulfillment',
+      );
+    }
+
+    return {
+      fulfillmentId: fulfillment.id,
+      orderId,
+      trackingReference: fulfillment.tracking_reference,
+      providerStatus: tracking.status,
+      events: tracking.events,
+    };
+  }
+
+  async getCustomerTrackingHistory(orderId: string, userId: string) {
+    const result = await this.database.query<{
+      order_id: string;
+      fulfillment_id: string | null;
+      fulfillment_status: string | null;
+      tracking_reference: string | null;
+      event_id: string | null;
+      event_status: string | null;
+      provider_status: string | null;
+      description: string | null;
+      location: string | null;
+      occurred_at: Date | string | null;
+    }>(
+      `SELECT
+         o.id AS order_id,
+         f.id AS fulfillment_id,
+         f.status AS fulfillment_status,
+         f.tracking_reference,
+         e.id AS event_id,
+         e.status AS event_status,
+         e.provider_status,
+         e.description,
+         e.location,
+         e.occurred_at
+       FROM marketplace_orders o
+       LEFT JOIN marketplace_fulfillments f
+         ON f.order_id = o.id
+       LEFT JOIN marketplace_fulfillment_tracking_events e
+         ON e.fulfillment_id = f.id
+       WHERE o.id = $1
+         AND o.customer_id = $2
+       ORDER BY
+         f.created_at ASC NULLS LAST,
+         e.occurred_at ASC NULLS LAST,
+         e.id ASC`,
+      [orderId, userId],
+    );
+
+    // Return the same not-found response for nonexistent orders and orders
+    // owned by another customer, preventing order-existence disclosure.
+    if (result.rows.length === 0) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const fulfillments = new Map<
+      string,
+      {
+        fulfillmentId: string;
+        status: string;
+        trackingReference: string | null;
+        events: Array<{
+          status: string;
+          providerStatus: string | null;
+          description: string | null;
+          location: string | null;
+          occurredAt: Date | string;
+        }>;
+      }
+    >();
+
+    for (const row of result.rows) {
+      if (!row.fulfillment_id || !row.fulfillment_status) {
+        continue;
+      }
+
+      let fulfillment = fulfillments.get(row.fulfillment_id);
+
+      if (!fulfillment) {
+        fulfillment = {
+          fulfillmentId: row.fulfillment_id,
+          status: row.fulfillment_status,
+          trackingReference: row.tracking_reference,
+          events: [],
+        };
+        fulfillments.set(row.fulfillment_id, fulfillment);
+      }
+
+      if (row.event_id && row.event_status && row.occurred_at) {
+        fulfillment.events.push({
+          status: row.event_status,
+          providerStatus: row.provider_status,
+          description: row.description,
+          location: row.location,
+          occurredAt: row.occurred_at,
+        });
+      }
+    }
+
+    return {
+      orderId: result.rows[0].order_id,
+      fulfillments: Array.from(fulfillments.values()),
+    };
+  }
+
   async getSellerFulfillment(
     orderId: string,
     userId: string,

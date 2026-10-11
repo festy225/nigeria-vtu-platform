@@ -50,6 +50,24 @@ export class MarketplaceFulfillmentController {
     );
   }
 
+  @Get('customer/:orderId/tracking-history')
+  @RequiresFeature('MARKETPLACE_DELIVERY_ENABLED')
+  getCustomerTrackingHistory(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId') orderId: string,
+  ) {
+    return this.fulfillment.getCustomerTrackingHistory(orderId, user.id);
+  }
+
+  @Get(':orderId/tracking')
+  @RequiresFeature('MARKETPLACE_DELIVERY_ENABLED')
+  trackSellerFulfillment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId') orderId: string,
+  ) {
+    return this.fulfillment.trackSellerFulfillment(orderId, user.id);
+  }
+
   @Get(':orderId')
   @RequiresFeature('MARKETPLACE_DELIVERY_ENABLED')
   getSellerFulfillment(

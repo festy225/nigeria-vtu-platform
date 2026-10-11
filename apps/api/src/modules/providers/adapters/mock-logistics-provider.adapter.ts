@@ -44,6 +44,29 @@ export class MockLogisticsProviderAdapter implements LogisticsProvider {
     };
   }
 
+  async trackShipment(
+    request: import('../interfaces/logistics-provider.interface').TrackLogisticsShipmentRequest,
+  ): Promise<import('../interfaces/logistics-provider.interface').TrackLogisticsShipmentResponse> {
+    return {
+      status: 'IN_TRANSIT',
+      events: [
+        {
+          providerEventId: `mock-${request.trackingReference}-in-transit`,
+          status: 'IN_TRANSIT',
+          providerStatus: 'SIMULATED_IN_TRANSIT',
+          description: 'Simulated tracking update from the test-only logistics provider.',
+          occurredAt: new Date().toISOString(),
+          metadata: { simulated: true },
+        },
+      ],
+      rawPayload: {
+        provider: this.name,
+        simulated: true,
+        trackingReference: request.trackingReference,
+      },
+    };
+  }
+
   async bookShipment(
     request: BookLogisticsShipmentRequest,
   ): Promise<BookLogisticsShipmentResponse> {

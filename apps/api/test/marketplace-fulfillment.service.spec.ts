@@ -23,7 +23,7 @@ describe('MarketplaceFulfillmentService', () => {
   let service: MarketplaceFulfillmentService;
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
 
     database.withTransaction.mockImplementation(
       async (callback: (client: typeof transaction) => unknown) =>
@@ -740,6 +740,347 @@ describe('MarketplaceFulfillmentService', () => {
         providerConfigurationId: 'provider-config-1',
         trackingReference: 'TEST-TRACK-123',
         status: 'BOOKED',
+      });
+    });
+  });
+
+
+  describe('trackSellerFulfillment', () => {
+    const fulfillment = {
+      id: 'fulfillment-1',
+      order_id: 'order-1',
+      status: 'BOOKED',
+      provider_configuration_id: 'provider-config-1',
+      tracking_reference: 'TRACK-123',
+    };
+
+    const trackingEvent = {
+      providerEventId: 'event-123',
+      status: 'IN_TRANSIT',
+      providerStatus: 'MOVING',
+      description: 'Shipment is in transit',
+      location: 'Lagos',
+      occurredAt: '2026-10-10T12:00:00.000Z',
+      metadata: { source: 'test' },
+    };
+
+    it('persists valid tracking events and requests tracking from the configured provider', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+      database.query.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [fulfillment],
+      });
+
+      const trackShipment = jest.fn().mockResolvedValue({
+        status: 'IN_TRANSIT',
+        events: [trackingEvent],
+        rawPayload: { source: 'test-provider' },
+      });
+
+      logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        provider: { trackShipment },
+        providerConfigurationId: 'provider-config-1',
+      });
+
+      transaction.query.mockImplementation((sql: string) =>
+        Promise.resolve(
+          sql.includes('SELECT status')
+            ? { rowCount: 1, rows: [{ status: 'BOOKED' }] }
+            : { rowCount: 1, rows: [] },
+        ),
+      );
+
+
+      const result = await service.trackSellerFulfillment(
+        'order-1',
+        'user-1',
+      );
+
+      expect(trackShipment).toHaveBeenCalledWith({
+        trackingReference: 'TRACK-123',
+      });
+      expect(transaction.query).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'INSERT INTO marketplace_fulfillment_tracking_events',
+        ),
+        [
+          'fulfillment-1',
+          'event-123',
+          'IN_TRANSIT',
+          'MOVING',
+          'Shipment is in transit',
+          'Lagos',
+          '2026-10-10T12:00:00.000Z',
+          JSON.stringify({ source: 'test' }),
+          JSON.stringify({ source: 'test-provider' }),
+        ],
+      );
+      expect(database.withTransaction).toHaveBeenCalledTimes(1);
+      expect(transaction.query).toHaveBeenLastCalledWith(
+        expect.stringContaining('UPDATE marketplace_fulfillments'),
+        ['fulfillment-1', 'IN_TRANSIT'],
+      );
+      expect(result).toEqual({
+        fulfillmentId: 'fulfillment-1',
+        orderId: 'order-1',
+        trackingReference: 'TRACK-123',
+        providerStatus: 'IN_TRANSIT',
+        events: [trackingEvent],
+      });
+    });
+
+    it('does not track an order that does not belong to the seller', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+      database.query.mockResolvedValueOnce({ rowCount: 0, rows: [] });
+
+      await expect(
+        service.trackSellerFulfillment('other-order', 'user-1'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      expect(logistics.getProviderRegistrationByConfigurationId)
+        .not.toHaveBeenCalled();
+      expect(database.withTransaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects tracking when shipment booking details are missing', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+      database.query.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{
+          ...fulfillment,
+          tracking_reference: null,
+        }],
+      });
+
+      await expect(
+        service.trackSellerFulfillment('order-1', 'user-1'),
+      ).rejects.toThrow(
+        'Shipment must be booked before tracking is available',
+      );
+
+      expect(logistics.getProviderRegistrationByConfigurationId)
+        .not.toHaveBeenCalled();
+    });
+
+    it('ignores invalid statuses and malformed event timestamps', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+      database.query.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [fulfillment],
+      });
+
+      const trackShipment = jest.fn().mockResolvedValue({
+        status: 'UNKNOWN',
+        events: [
+          { ...trackingEvent, status: 'NOT_A_STATUS' },
+          { ...trackingEvent, providerEventId: 'bad-date', occurredAt: 'invalid' },
+        ],
+        rawPayload: {},
+      });
+
+      logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        provider: { trackShipment },
+        providerConfigurationId: 'provider-config-1',
+      });
+
+      transaction.query.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ status: 'BOOKED' }],
+      });
+
+      const result = await service.trackSellerFulfillment(
+        'order-1',
+        'user-1',
+      );
+
+      expect(transaction.query).toHaveBeenCalledTimes(1);
+      expect(transaction.query).toHaveBeenCalledWith(
+        expect.stringContaining('FOR UPDATE'),
+        ['fulfillment-1'],
+      );
+      expect(database.withTransaction).toHaveBeenCalledTimes(1);
+      expect(result.providerStatus).toBe('UNKNOWN');
+      expect(database.query).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not persist tracking events if fulfillment becomes cancelled during tracking', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+      database.query.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ ...fulfillment, status: 'BOOKED' }],
+      });
+
+      logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        provider: {
+          trackShipment: jest.fn().mockResolvedValue({
+            status: 'IN_TRANSIT',
+            events: [trackingEvent],
+            rawPayload: {},
+          }),
+        },
+        providerConfigurationId: 'provider-config-1',
+      });
+
+      transaction.query.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ status: 'CANCELLED' }],
+      });
+
+      await expect(
+        service.trackSellerFulfillment('order-1', 'user-1'),
+      ).rejects.toThrow('Cancelled shipments cannot be tracked');
+
+      expect(transaction.query).toHaveBeenCalledTimes(1);
+      expect(transaction.query).toHaveBeenCalledWith(
+        expect.stringContaining('FOR UPDATE'),
+        ['fulfillment-1'],
+      );
+      expect(transaction.query).not.toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO marketplace_fulfillment_tracking_events'),
+        expect.anything(),
+      );
+      expect(transaction.query).not.toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE marketplace_fulfillments'),
+        expect.anything(),
+      );
+    });
+
+    it('does not update a cancelled fulfillment', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+      database.query.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{
+          ...fulfillment,
+          status: 'CANCELLED',
+        }],
+      });
+
+      await expect(
+        service.trackSellerFulfillment('order-1', 'user-1'),
+      ).rejects.toThrow('Cancelled shipments cannot be tracked');
+
+      expect(logistics.getProviderRegistrationByConfigurationId)
+        .not.toHaveBeenCalled();
+      expect(database.withTransaction).not.toHaveBeenCalled();
+    });
+  });
+
+
+  describe('getCustomerTrackingHistory', () => {
+    it('returns chronological tracking history for the customer order', async () => {
+      const rows = [
+        {
+          order_id: 'order-1',
+          fulfillment_id: 'fulfillment-1',
+          fulfillment_status: 'BOOKED',
+          tracking_reference: 'TRACK-123',
+          event_id: 'event-1',
+          event_status: 'PICKED_UP',
+          provider_status: 'COLLECTED',
+          description: 'Package collected',
+          location: 'Lagos',
+          occurred_at: '2026-10-10T10:00:00.000Z',
+        },
+        {
+          order_id: 'order-1',
+          fulfillment_id: 'fulfillment-1',
+          fulfillment_status: 'IN_TRANSIT',
+          tracking_reference: 'TRACK-123',
+          event_id: 'event-2',
+          event_status: 'IN_TRANSIT',
+          provider_status: 'MOVING',
+          description: 'Package in transit',
+          location: 'Ibadan',
+          occurred_at: '2026-10-10T12:00:00.000Z',
+        },
+      ];
+
+      database.query.mockResolvedValueOnce({
+        rowCount: rows.length,
+        rows,
+      });
+
+      const result = await service.getCustomerTrackingHistory(
+        'order-1',
+        'user-1',
+      );
+
+      expect(database.query).toHaveBeenCalledWith(
+        expect.stringContaining('o.customer_id = $2'),
+        ['order-1', 'user-1'],
+      );
+
+      expect(result).toEqual({
+        orderId: 'order-1',
+        fulfillments: [
+          {
+            fulfillmentId: 'fulfillment-1',
+            status: 'BOOKED',
+            trackingReference: 'TRACK-123',
+            events: [
+              {
+                status: 'PICKED_UP',
+                providerStatus: 'COLLECTED',
+                description: 'Package collected',
+                location: 'Lagos',
+                occurredAt: '2026-10-10T10:00:00.000Z',
+              },
+              {
+                status: 'IN_TRANSIT',
+                providerStatus: 'MOVING',
+                description: 'Package in transit',
+                location: 'Ibadan',
+                occurredAt: '2026-10-10T12:00:00.000Z',
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(JSON.stringify(result)).not.toContain('raw_payload');
+      expect(JSON.stringify(result)).not.toContain('metadata');
+    });
+
+    it('does not disclose orders that do not belong to the customer', async () => {
+      database.query.mockResolvedValueOnce({
+        rowCount: 0,
+        rows: [],
+      });
+
+      await expect(
+        service.getCustomerTrackingHistory('another-order', 'user-1'),
+      ).rejects.toThrow('Order not found');
+
+      expect(database.query).toHaveBeenCalledWith(
+        expect.stringContaining('o.customer_id = $2'),
+        ['another-order', 'user-1'],
+      );
+    });
+
+    it('returns an empty fulfillment list when the order has no fulfillment yet', async () => {
+      database.query.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [
+          {
+            order_id: 'order-1',
+            fulfillment_id: null,
+            fulfillment_status: null,
+            tracking_reference: null,
+            event_id: null,
+            event_status: null,
+            provider_status: null,
+            description: null,
+            location: null,
+            occurred_at: null,
+          },
+        ],
+      });
+
+      await expect(
+        service.getCustomerTrackingHistory('order-1', 'user-1'),
+      ).resolves.toEqual({
+        orderId: 'order-1',
+        fulfillments: [],
       });
     });
   });

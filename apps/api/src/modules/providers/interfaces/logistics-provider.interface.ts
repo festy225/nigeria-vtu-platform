@@ -28,6 +28,36 @@ export interface CheckLogisticsServiceabilityResponse {
   rawPayload?: unknown;
 }
 
+export type LogisticsTrackingStatus =
+  | 'BOOKED'
+  | 'PICKED_UP'
+  | 'IN_TRANSIT'
+  | 'OUT_FOR_DELIVERY'
+  | 'DELIVERED'
+  | 'FAILED'
+  | 'RETURNED'
+  | 'UNKNOWN';
+
+export interface LogisticsTrackingEvent {
+  providerEventId?: string | null;
+  status: LogisticsTrackingStatus;
+  providerStatus?: string | null;
+  description?: string | null;
+  location?: string | null;
+  occurredAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface TrackLogisticsShipmentRequest {
+  trackingReference: string;
+}
+
+export interface TrackLogisticsShipmentResponse {
+  status: LogisticsTrackingStatus;
+  events: LogisticsTrackingEvent[];
+  rawPayload?: unknown;
+}
+
 export interface LogisticsProvider {
   readonly name: string;
   readonly runtimeMode: 'production' | 'test-only';
@@ -45,6 +75,10 @@ export interface LogisticsProvider {
   bookShipment(
     request: BookLogisticsShipmentRequest,
   ): Promise<BookLogisticsShipmentResponse>;
+
+  trackShipment(
+    request: TrackLogisticsShipmentRequest,
+  ): Promise<TrackLogisticsShipmentResponse>;
 }
 
 export interface LogisticsOffice {
