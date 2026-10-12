@@ -588,6 +588,8 @@ if (response.status !== 'PENDING') {
 
     const row = initialization.row;
     const provider = providerRegistration.provider;
+    let providerConfirmedFailure = false;
+
     try {
       const response = await provider.initializePayment({
         paymentReference: row.payment_reference,
@@ -601,6 +603,13 @@ if (response.status !== 'PENDING') {
           paymentPurpose: 'MARKETPLACE_ORDER',
         },
       });
+
+      if (response.status === 'FAILED') {
+        providerConfirmedFailure = true;
+        throw new BadGatewayException(
+          'Payment provider reported initialization failure',
+        );
+      }
 
       if (response.status !== 'PENDING') {
         throw new BadGatewayException(
@@ -645,16 +654,19 @@ if (response.status !== 'PENDING') {
         payment_provider_checkout_url: response.checkoutUrl,
       });
     } catch (error) {
-      await this.db.query(
-        `UPDATE payments
-         SET provider_name = COALESCE(provider_name, $1),
-             provider_status = 'FAILED'
-         WHERE id = $2
-           AND state = 'PENDING'
-           AND purpose = 'MARKETPLACE_ORDER'
-           AND provider_status = 'INITIALIZING'`,
-        [provider.name, row.payment_id],
-      );
+      if (providerConfirmedFailure) {
+        await this.db.query(
+          `UPDATE payments
+           SET provider_name = COALESCE(provider_name, $1),
+               provider_status = 'FAILED'
+           WHERE id = $2
+             AND state = 'PENDING'
+             AND purpose = 'MARKETPLACE_ORDER'
+             AND provider_status = 'INITIALIZING'`,
+          [provider.name, row.payment_id],
+        );
+      }
+
       if (
         error instanceof ServiceUnavailableException ||
         error instanceof BadGatewayException ||

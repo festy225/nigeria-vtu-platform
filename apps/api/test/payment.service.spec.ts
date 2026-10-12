@@ -1,4 +1,5 @@
 import {
+  BadGatewayException,
   BadRequestException,
   ConflictException,
   ForbiddenException,
@@ -200,6 +201,68 @@ const marketplaceCartService = {
     expect(result.checkout).toEqual({
       url: 'https://provider.invalid/checkout',
     });
+  });
+
+  it('preserves marketplace payment initialization state after an ambiguous provider timeout', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'marketplace-order-id',
+          customer_id: 'user-id',
+          status: 'PENDING_PAYMENT',
+          total_minor: '2750',
+          currency: 'NGN',
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'marketplace-order-id',
+          customer_id: 'user-id',
+          status: 'PENDING_PAYMENT',
+          total_minor: '2750',
+          currency: 'NGN',
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{
+          payment_id: 'payment-id',
+          payment_reference: 'PAY-reference',
+          payment_user_id: 'user-id',
+          payment_amount_minor: '2750',
+          payment_currency: 'NGN',
+          payment_state: 'PENDING',
+          payment_purpose: 'MARKETPLACE_ORDER',
+          payment_provider_configuration_id: 'provider-configuration-id',
+          payment_provider_name: null,
+          payment_provider_reference: null,
+          payment_provider_status: 'INITIALIZING',
+          payment_provider_checkout_url: null,
+        }],
+      });
+
+    provider.initializePayment.mockRejectedValueOnce(
+      new Error('socket timeout after request was sent'),
+    );
+
+    await expect(
+      service.createMarketplacePaymentIntent(
+        'user-id',
+        'user@example.test',
+        { orderId: 'marketplace-order-id' },
+      ),
+    ).rejects.toThrow(BadGatewayException);
+
+    expect(provider.initializePayment).toHaveBeenCalledTimes(1);
+    expect(db.query).not.toHaveBeenCalled();
+
+    const transactionQueries = client.query.mock.calls
+      .map(([sql]) => String(sql));
+
+    expect(
+      transactionQueries.some((sql) => /provider_status\s*=\s*'FAILED'/i.test(sql)),
+    ).toBe(false);
   });
 
   it('does not reveal or pay an order belonging to another customer', async () => {
