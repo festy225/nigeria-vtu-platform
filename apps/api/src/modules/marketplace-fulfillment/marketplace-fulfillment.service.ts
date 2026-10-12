@@ -915,7 +915,13 @@ providerConfiguration: this.providerExecutionConfiguration(provider),
   async trackSellerFulfillment(orderId: string, userId: string) {
     const sellerId = await this.sellers.getSellerIdByUserId(userId);
 
-    const result = await this.database.query(
+    const result = await this.database.query<{
+      id: string;
+      order_id: string;
+      status: string;
+      provider_configuration_id: string | null;
+      tracking_reference: string | null;
+    }>(
       `SELECT id, order_id, status, provider_configuration_id,
               tracking_reference
        FROM marketplace_fulfillments
@@ -929,6 +935,19 @@ providerConfiguration: this.providerExecutionConfiguration(provider),
       throw new NotFoundException('Fulfillment not found for this seller');
     }
 
+    return this.trackFulfillmentRecord(orderId, fulfillment);
+  }
+
+  private async trackFulfillmentRecord(
+    orderId: string,
+    fulfillment: {
+      id: string;
+      order_id: string;
+      status: string;
+      provider_configuration_id: string | null;
+      tracking_reference: string | null;
+    },
+  ) {
     if (fulfillment.status === 'CANCELLED') {
       throw new ConflictException('Cancelled shipments cannot be tracked');
     }
@@ -1101,6 +1120,58 @@ providerConfiguration: this.providerExecutionConfiguration(registration),
       trackingReference: fulfillment.tracking_reference,
       providerStatus: tracking.status,
       events: tracking.events,
+    };
+  }
+
+  async reconcileTrackingBatch(batchSize: number): Promise<{
+    selected: number;
+    succeeded: number;
+    failed: number;
+  }> {
+    if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 100) {
+      throw new BadRequestException('Tracking batch size must be between 1 and 100');
+    }
+
+    const result = await this.database.query<{
+      id: string;
+      order_id: string;
+      status: string;
+      provider_configuration_id: string | null;
+      tracking_reference: string | null;
+    }>(
+      `SELECT id, order_id, status, provider_configuration_id,
+              tracking_reference
+       FROM marketplace_fulfillments
+       WHERE status IN ('BOOKED', 'PICKED_UP', 'IN_TRANSIT')
+         AND provider_configuration_id IS NOT NULL
+         AND tracking_reference IS NOT NULL
+         AND btrim(tracking_reference) <> ''
+       ORDER BY updated_at ASC, id ASC
+       LIMIT $1`,
+      [batchSize],
+    );
+
+    let succeeded = 0;
+    let failed = 0;
+
+    // Process sequentially to avoid flooding configured logistics providers.
+    // Each shipment is isolated so a single provider failure cannot stop the batch.
+    for (const fulfillment of result.rows) {
+      try {
+        await this.trackFulfillmentRecord(
+          fulfillment.order_id,
+          fulfillment,
+        );
+        succeeded += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+
+    return {
+      selected: result.rows.length,
+      succeeded,
+      failed,
     };
   }
 
