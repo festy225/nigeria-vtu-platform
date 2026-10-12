@@ -286,29 +286,32 @@ export class ProviderRegistryService {
             ],
           );
 
-          return result.rows[0];
+          const mapped = this.mapConfiguration(result.rows[0]);
+
+          if (updatedBy) {
+            await this.audit.record(
+              {
+                actorId: updatedBy,
+                action: 'PROVIDER_CONFIGURATION_CREATED',
+                resourceType: 'PROVIDER_CONFIGURATION',
+                resourceId: mapped.id,
+                afterData: {
+                  providerId: mapped.providerId,
+                  serviceId: mapped.serviceId,
+                  priority: mapped.priority,
+                  isPrimary: mapped.isPrimary,
+                  isBackup: mapped.isBackup,
+                  enabled: mapped.enabled,
+                },
+              },
+              client,
+            );
+          }
+
+          return mapped;
         },
       );
-
-      const mapped = this.mapConfiguration(configuration);
-
-      if (updatedBy) {
-  await this.audit.record({
-    actorId: updatedBy,
-    action: 'PROVIDER_CONFIGURATION_CREATED',
-    resourceType: 'PROVIDER_CONFIGURATION',
-    resourceId: mapped.id,
-    afterData: {
-      providerId: mapped.providerId,
-      serviceId: mapped.serviceId,
-      priority: mapped.priority,
-      isPrimary: mapped.isPrimary,
-      isBackup: mapped.isBackup,
-      enabled: mapped.enabled,
-    },
-  });
-}
-      return mapped;
+      return configuration;
     } catch (error) {
       if (error instanceof NotFoundException || error instanceof BadRequestException) {
         throw error;
