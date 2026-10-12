@@ -736,41 +736,113 @@ export class MarketplaceFulfillmentService {
       ReturnType<typeof provider.provider.bookShipment>
     >;
 
-    try {
-      result = await provider.provider.bookShipment({
-        idempotencyKey: booking.idempotencyKey,
-        origin: {
-          addressLine1: row.origin_snapshot.address_line1,
-          addressLine2: row.origin_snapshot.address_line2,
-          city: row.origin_snapshot.city,
-          stateProvince: row.origin_snapshot.state_province,
-          postalCode: row.origin_snapshot.postal_code,
-          countryCode: row.origin_snapshot.country_code,
-          latitude: row.origin_snapshot.latitude,
-          longitude: row.origin_snapshot.longitude,
-        },
-        destination: {
-          addressLine1: row.destination_snapshot.address_line1,
-          addressLine2: row.destination_snapshot.address_line2,
-          city: row.destination_snapshot.city,
-          stateProvince: row.destination_snapshot.state_province,
-          postalCode: row.destination_snapshot.postal_code,
-          countryCode: row.destination_snapshot.country_code,
-          latitude: row.destination_snapshot.latitude,
-          longitude: row.destination_snapshot.longitude,
-        },
-        packages: booking.items.map((item) => ({
-          quantity: item.quantity,
-        })),
-        selectedOffice: row.selected_office_snapshot!,
-      });
-    } catch {
-      // The provider may have created the shipment before the connection
-      // failed. Keep BOOKING_IN_PROGRESS so a retry cannot immediately
-      // issue a fresh booking. Recovery reuses the same idempotency key.
-      throw new ConflictException(
-        'Shipment booking outcome is uncertain. The booking key has been retained for safe recovery.',
-      );
+    if (row.status === 'BOOKING_IN_PROGRESS') {
+      // Never blindly repeat a potentially successful external booking.
+      // Providers without lookup support remain safely unresolved.
+      if (!provider.provider.lookupBooking) {
+        throw new ConflictException(
+          'The logistics provider cannot reconcile the previous booking. The fulfillment remains in progress for manual or provider-specific recovery.',
+        );
+      }
+
+      let lookup: Awaited<
+        ReturnType<NonNullable<typeof provider.provider.lookupBooking>>
+      >;
+
+      try {
+        lookup = await provider.provider.lookupBooking({
+          idempotencyKey: booking.idempotencyKey,
+        });
+      } catch {
+        throw new ConflictException(
+          'Shipment booking outcome remains unknown. No new booking was attempted; retry reconciliation later.',
+        );
+      }
+
+      if (lookup.status === 'UNKNOWN') {
+        throw new ConflictException(
+          'Shipment booking outcome remains unknown. No new booking was attempted; retry reconciliation later.',
+        );
+      }
+
+      if (lookup.status === 'FOUND') {
+        result = {
+          trackingReference: lookup.trackingReference,
+          rawPayload: lookup.rawPayload,
+        };
+      } else {
+        // Only an explicit NOT_FOUND allows another booking attempt.
+        // The exact original key is retained.
+        try {
+          result = await provider.provider.bookShipment({
+            idempotencyKey: booking.idempotencyKey,
+            origin: {
+              addressLine1: row.origin_snapshot.address_line1,
+              addressLine2: row.origin_snapshot.address_line2,
+              city: row.origin_snapshot.city,
+              stateProvince: row.origin_snapshot.state_province,
+              postalCode: row.origin_snapshot.postal_code,
+              countryCode: row.origin_snapshot.country_code,
+              latitude: row.origin_snapshot.latitude,
+              longitude: row.origin_snapshot.longitude,
+            },
+            destination: {
+              addressLine1: row.destination_snapshot.address_line1,
+              addressLine2: row.destination_snapshot.address_line2,
+              city: row.destination_snapshot.city,
+              stateProvince: row.destination_snapshot.state_province,
+              postalCode: row.destination_snapshot.postal_code,
+              countryCode: row.destination_snapshot.country_code,
+              latitude: row.destination_snapshot.latitude,
+              longitude: row.destination_snapshot.longitude,
+            },
+            packages: booking.items.map((item) => ({
+              quantity: item.quantity,
+            })),
+            selectedOffice: row.selected_office_snapshot!,
+          });
+        } catch {
+          throw new ConflictException(
+            'Shipment booking outcome is uncertain. The booking key has been retained for safe recovery.',
+          );
+        }
+      }
+    } else {
+      try {
+        result = await provider.provider.bookShipment({
+          idempotencyKey: booking.idempotencyKey,
+          origin: {
+            addressLine1: row.origin_snapshot.address_line1,
+            addressLine2: row.origin_snapshot.address_line2,
+            city: row.origin_snapshot.city,
+            stateProvince: row.origin_snapshot.state_province,
+            postalCode: row.origin_snapshot.postal_code,
+            countryCode: row.origin_snapshot.country_code,
+            latitude: row.origin_snapshot.latitude,
+            longitude: row.origin_snapshot.longitude,
+          },
+          destination: {
+            addressLine1: row.destination_snapshot.address_line1,
+            addressLine2: row.destination_snapshot.address_line2,
+            city: row.destination_snapshot.city,
+            stateProvince: row.destination_snapshot.state_province,
+            postalCode: row.destination_snapshot.postal_code,
+            countryCode: row.destination_snapshot.country_code,
+            latitude: row.destination_snapshot.latitude,
+            longitude: row.destination_snapshot.longitude,
+          },
+          packages: booking.items.map((item) => ({
+            quantity: item.quantity,
+          })),
+          selectedOffice: row.selected_office_snapshot!,
+        });
+      } catch {
+        // The provider may have created the shipment before the connection
+        // failed. Keep BOOKING_IN_PROGRESS for later reconciliation.
+        throw new ConflictException(
+          'Shipment booking outcome is uncertain. The booking key has been retained for safe recovery.',
+        );
+      }
     }
 
     // Persist the provider result in a separate, short transaction.

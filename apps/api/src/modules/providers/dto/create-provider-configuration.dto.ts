@@ -5,6 +5,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   Max,
   MaxLength,
   Min,
@@ -36,6 +37,9 @@ export class CreateProviderConfigurationDto {
   @IsString()
   @MinLength(1)
   @MaxLength(255)
+  @Matches(/^env:[A-Z][A-Z0-9_]*$/, {
+    message: 'secretRef must use the env:VARIABLE_NAME format',
+  })
   secretRef!: string;
 
   @IsOptional()

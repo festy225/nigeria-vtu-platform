@@ -838,6 +838,192 @@ describe('MarketplaceFulfillmentService', () => {
         ],
       );
     });
+
+    it('recovers an existing provider booking without creating another shipment', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+
+      const recoveryRow = {
+        ...fulfillmentRow,
+        status: 'BOOKING_IN_PROGRESS',
+        booking_idempotency_key: 'chimzo-fulfillment-fulfillment-1',
+        booking_started_at: new Date(Date.now() - 10 * 60 * 1000),
+      };
+
+      transaction.query
+        .mockResolvedValueOnce({ rowCount: 1, rows: [recoveryRow] })
+        .mockResolvedValueOnce({
+          rowCount: 2,
+          rows: [{ quantity: 2 }, { quantity: 1 }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      const lookupBooking = jest.fn().mockResolvedValue({
+        status: 'FOUND',
+        trackingReference: 'RECOVERED-TRACK-123',
+        rawPayload: { recovered: true },
+      });
+      const bookShipment = jest.fn();
+
+      logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        provider: { lookupBooking, bookShipment },
+        providerConfigurationId: 'provider-config-1',
+      });
+
+      const result = await service.bookSellerFulfillment('order-1', 'user-1');
+
+      expect(lookupBooking).toHaveBeenCalledWith({
+        idempotencyKey: 'chimzo-fulfillment-fulfillment-1',
+      });
+      expect(bookShipment).not.toHaveBeenCalled();
+      expect(transaction.query).toHaveBeenLastCalledWith(
+        expect.stringContaining('tracking_reference = $1'),
+        [
+          'RECOVERED-TRACK-123',
+          'fulfillment-1',
+          'chimzo-fulfillment-fulfillment-1',
+        ],
+      );
+      expect(result).toEqual({
+        fulfillmentId: 'fulfillment-1',
+        orderId: 'order-1',
+        sellerId: 'seller-1',
+        providerConfigurationId: 'provider-config-1',
+        trackingReference: 'RECOVERED-TRACK-123',
+        status: 'BOOKED',
+      });
+    });
+
+    it('retries booking with the same idempotency key only after NOT_FOUND', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+
+      const recoveryRow = {
+        ...fulfillmentRow,
+        status: 'BOOKING_IN_PROGRESS',
+        booking_idempotency_key: 'chimzo-fulfillment-fulfillment-1',
+        booking_started_at: new Date(Date.now() - 10 * 60 * 1000),
+      };
+
+      transaction.query
+        .mockResolvedValueOnce({ rowCount: 1, rows: [recoveryRow] })
+        .mockResolvedValueOnce({
+          rowCount: 2,
+          rows: [{ quantity: 2 }, { quantity: 1 }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      const lookupBooking = jest.fn().mockResolvedValue({
+        status: 'NOT_FOUND',
+      });
+      const bookShipment = jest.fn().mockResolvedValue({
+        trackingReference: 'RETRIED-TRACK-456',
+        rawPayload: { retried: true },
+      });
+
+      logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        provider: { lookupBooking, bookShipment },
+        providerConfigurationId: 'provider-config-1',
+      });
+
+      const result = await service.bookSellerFulfillment('order-1', 'user-1');
+
+      expect(lookupBooking).toHaveBeenCalledWith({
+        idempotencyKey: 'chimzo-fulfillment-fulfillment-1',
+      });
+      expect(bookShipment).toHaveBeenCalledTimes(1);
+      expect(bookShipment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          idempotencyKey: 'chimzo-fulfillment-fulfillment-1',
+          selectedOffice: fulfillmentRow.selected_office_snapshot,
+        }),
+      );
+      expect(transaction.query).toHaveBeenLastCalledWith(
+        expect.stringContaining('tracking_reference = $1'),
+        [
+          'RETRIED-TRACK-456',
+          'fulfillment-1',
+          'chimzo-fulfillment-fulfillment-1',
+        ],
+      );
+      expect(result.status).toBe('BOOKED');
+      expect(result.trackingReference).toBe('RETRIED-TRACK-456');
+    });
+
+    it('does not retry booking when the provider lookup outcome is UNKNOWN', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+
+      const recoveryRow = {
+        ...fulfillmentRow,
+        status: 'BOOKING_IN_PROGRESS',
+        booking_idempotency_key: 'chimzo-fulfillment-fulfillment-1',
+        booking_started_at: new Date(Date.now() - 10 * 60 * 1000),
+      };
+
+      transaction.query
+        .mockResolvedValueOnce({ rowCount: 1, rows: [recoveryRow] })
+        .mockResolvedValueOnce({
+          rowCount: 2,
+          rows: [{ quantity: 2 }, { quantity: 1 }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      const lookupBooking = jest.fn().mockResolvedValue({
+        status: 'UNKNOWN',
+      });
+      const bookShipment = jest.fn();
+
+      logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        provider: { lookupBooking, bookShipment },
+        providerConfigurationId: 'provider-config-1',
+      });
+
+      await expect(
+        service.bookSellerFulfillment('order-1', 'user-1'),
+      ).rejects.toThrow('outcome remains unknown');
+
+      expect(lookupBooking).toHaveBeenCalledTimes(1);
+      expect(bookShipment).not.toHaveBeenCalled();
+      expect(transaction.query).toHaveBeenCalledTimes(3);
+    });
+
+    it('does not retry booking when provider lookup throws', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+
+      const recoveryRow = {
+        ...fulfillmentRow,
+        status: 'BOOKING_IN_PROGRESS',
+        booking_idempotency_key: 'chimzo-fulfillment-fulfillment-1',
+        booking_started_at: new Date(Date.now() - 10 * 60 * 1000),
+      };
+
+      transaction.query
+        .mockResolvedValueOnce({ rowCount: 1, rows: [recoveryRow] })
+        .mockResolvedValueOnce({
+          rowCount: 2,
+          rows: [{ quantity: 2 }, { quantity: 1 }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      const lookupBooking = jest.fn().mockRejectedValue(
+        new Error('provider lookup timeout'),
+      );
+      const bookShipment = jest.fn();
+
+      logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        provider: { lookupBooking, bookShipment },
+        providerConfigurationId: 'provider-config-1',
+      });
+
+      await expect(
+        service.bookSellerFulfillment('order-1', 'user-1'),
+      ).rejects.toThrow('outcome remains unknown');
+
+      expect(lookupBooking).toHaveBeenCalledTimes(1);
+      expect(bookShipment).not.toHaveBeenCalled();
+      expect(transaction.query).toHaveBeenCalledTimes(3);
+    });
+
   });
 
 

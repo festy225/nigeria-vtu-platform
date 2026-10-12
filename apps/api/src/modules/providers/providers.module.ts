@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ProviderSecretResolver } from './security/provider-secret-resolver.service';
 import { AuthorizationModule } from '../auth/authorization.module';
 import { AuditModule } from '../audit/audit.module';
 import { ProviderManagementController } from './management/provider-management.controller';
@@ -30,6 +31,7 @@ export const AIRTIME_PROVIDER_REGISTRATIONS = Symbol(
   imports: [AuthorizationModule, AuditModule],
   controllers: [ProviderManagementController],
   providers: [
+    ProviderSecretResolver,
     ProviderRegistryService,
     MockPaymentProviderAdapter,
     {
@@ -87,6 +89,7 @@ export const AIRTIME_PROVIDER_REGISTRATIONS = Symbol(
   ],
 
   exports: [
+    ProviderSecretResolver,
     ProviderRegistryService,
     PaymentProviderRouterService,
     AirtimeProviderRouterService,

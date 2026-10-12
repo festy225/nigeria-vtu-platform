@@ -70,7 +70,9 @@ const migrations = [
   '0037_marketplace_fulfillment_office_selection.sql',
   '0038_marketplace_fulfillment_tracking.sql',
   '0039_marketplace_fulfillment_booking_recovery.sql',
-  '0040_marketplace_order_delivery_address.sql'
+  '0040_marketplace_order_delivery_address.sql',
+  '0041_provider_primary_route_uniqueness.sql',
+  '0042_marketplace_payment_recovery_claims.sql'
 ];
 
 const migrationsDirectory = resolve(repoRoot, 'database/migrations');

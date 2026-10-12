@@ -148,6 +148,15 @@ export class ProviderRegistryService {
     dto: CreateProviderConfigurationDto,
     updatedBy?: string,
   ): Promise<ProviderConfigurationRecord> {
+    if (
+      typeof dto.secretRef !== 'string' ||
+      !/^env:[A-Z][A-Z0-9_]*$/.test(dto.secretRef)
+    ) {
+      throw new BadRequestException(
+        'secretRef must use the env:VARIABLE_NAME format',
+      );
+    }
+
     if (dto.isPrimary && dto.isBackup) {
       throw new BadRequestException(
         'A provider configuration cannot be both primary and backup',
@@ -194,6 +203,13 @@ export class ProviderRegistryService {
           }
 
           if (dto.isPrimary) {
+            // Serialize primary-provider changes per routing scope.
+            // Row locks alone cannot protect an empty result set.
+            await client.query(
+              `SELECT pg_advisory_xact_lock(hashtext($1))`,
+              [`provider-primary-route:${dto.serviceId ?? 'GLOBAL'}`],
+            );
+
             await client.query(
               `
                 SELECT id

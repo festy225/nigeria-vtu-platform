@@ -5,6 +5,7 @@ import type { PoolClient } from 'pg';
 import type { CurrencyCode } from '@nigeria-vtu-platform/shared';
 import { DatabaseService } from '../../infrastructure/database/database.service';
 import { PaymentProviderRouterService } from '../providers/routing/payment-provider-router.service';
+import { ProviderSecretResolver } from '../providers/security/provider-secret-resolver.service';
 import type {
   CreateMembershipPaymentDto,
   MembershipBillingPeriod,
@@ -130,6 +131,7 @@ export class PaymentService {
     private readonly walletService: WalletService,
     private readonly marketplaceOrderService: MarketplaceOrderService,
     private readonly marketplaceCartService: MarketplaceCartService,
+    private readonly providerSecretResolver: ProviderSecretResolver,
   ) {}
 
   async createFundingIntent(userId: string, customerEmail: string | null, request: FundWalletDto) {
@@ -592,6 +594,13 @@ if (response.status !== 'PENDING') {
 
     try {
       const response = await provider.initializePayment({
+        providerConfiguration: {
+          id: providerRegistration.configuration.id,
+          config: providerRegistration.configuration.config,
+          credentials: this.providerSecretResolver.resolve(
+            providerRegistration.configuration.secretRef,
+          ),
+        },
         paymentReference: row.payment_reference,
         amountMinor: Number(row.payment_amount_minor),
         currency: row.payment_currency,
@@ -736,7 +745,9 @@ if (response.status !== 'PENDING') {
               providerConfiguration: {
                 id: providerRegistration.configuration.id,
                 config: providerRegistration.configuration.config,
-                secretRef: providerRegistration.configuration.secretRef,
+                credentials: this.providerSecretResolver.resolve(
+                  providerRegistration.configuration.secretRef,
+                ),
               },
             }
           : {}),
@@ -917,79 +928,12 @@ if (response.status !== 'PENDING') {
       }
 
       if (payment.payment_purpose === 'MARKETPLACE_ORDER') {
-        if (!payment.marketplace_order_id) {
-          throw new NotFoundException('Marketplace order not found');
-        }
-
-        const order = await this.lockMarketplaceOrder(
+        return this.settleMarketplacePayment(
           client,
-          payment.payment_user_id,
-          payment.marketplace_order_id,
+          payment,
+          event.providerReference,
+          event.rawPayload,
         );
-        this.validateMarketplaceOrderForPayment(order);
-
-        const orderAmountMinor = Number(order.total_minor);
-        if (
-          !Number.isSafeInteger(orderAmountMinor) ||
-          orderAmountMinor !== Number(payment.payment_amount_minor) ||
-          order.currency !== payment.payment_currency
-        ) {
-          throw new ConflictException(
-            'Marketplace order amount or currency does not match payment',
-          );
-        }
-
-        const itemsResult = await client.query<{ id: string }>(
-          `SELECT id
-           FROM marketplace_order_items
-           WHERE order_id = $1
-           ORDER BY id`,
-          [order.id],
-        );
-
-        if (itemsResult.rows.length === 0) {
-          throw new ConflictException(
-            'Marketplace order has no items to settle',
-          );
-        }
-
-        for (const item of itemsResult.rows) {
-          await this.marketplaceOrderService.consumeInventoryReservation(
-            client,
-            order.id,
-            item.id,
-          );
-        }
-
-        await this.marketplaceOrderService.placePendingPaymentOrder(
-          client,
-          order.id,
-        );
-        await this.marketplaceCartService.finalizePendingOrderCart(
-          client,
-          payment.payment_user_id,
-          order.id,
-        );
-
-        await client.query(
-          `UPDATE payments
-           SET state='SUCCESSFUL',
-               provider_reference=$1,
-               provider_status='SUCCESS',
-               provider_metadata=$2
-           WHERE id=$3`,
-          [
-            event.providerReference,
-            JSON.stringify(event.rawPayload),
-            payment.payment_id,
-          ],
-        );
-
-        return {
-          status: 'SUCCESSFUL',
-          paymentReference: payment.payment_reference,
-          alreadyProcessed: false,
-        };
       }
 
       if (deposit) {
@@ -1150,6 +1094,357 @@ if (response.status !== 'PENDING') {
       );
     }
     return rawPayload.paymentReference;
+  }
+
+  /**
+   * Reconcile old marketplace payments whose provider initialization result
+   * was ambiguous. This method must be invoked internally, not exposed as a
+   * public HTTP endpoint.
+   */
+  async recoverInitializingMarketplacePayments(
+    staleAfterSeconds = 300,
+    batchSize = 25,
+    recoveryLeaseSeconds = 600,
+  ) {
+    if (
+      !Number.isSafeInteger(staleAfterSeconds) ||
+      staleAfterSeconds < 1 ||
+      !Number.isSafeInteger(batchSize) ||
+      batchSize < 1 ||
+      batchSize > 100 ||
+      !Number.isSafeInteger(recoveryLeaseSeconds) ||
+      recoveryLeaseSeconds < 30 ||
+      recoveryLeaseSeconds > 3600
+    ) {
+      throw new BadRequestException(
+        'Payment recovery limits are invalid',
+      );
+    }
+
+    /*
+     * Claim stale payments in one atomic database statement.
+     *
+     * FOR UPDATE SKIP LOCKED allows concurrent workers to claim
+     * different rows instead of selecting the same candidates.
+     * Expired claims are eligible for reclamation after a worker
+     * crashes or stops responding.
+     */
+    const candidates = await this.db.query<
+      PaymentSettlementRow & {
+        recovery_claim_token: string;
+      }
+    >(
+      `WITH candidates AS (
+         SELECT id
+         FROM payments
+         WHERE purpose = 'MARKETPLACE_ORDER'
+           AND state = 'PENDING'
+           AND provider_status = 'INITIALIZING'
+           AND created_at <=
+             NOW() - ($1::integer * INTERVAL '1 second')
+           AND (
+             recovery_claim_token IS NULL
+             OR recovery_claim_expires_at <= NOW()
+           )
+         ORDER BY created_at ASC
+         LIMIT $2
+         FOR UPDATE SKIP LOCKED
+       )
+       UPDATE payments AS p
+       SET
+         recovery_claim_token = gen_random_uuid(),
+         recovery_claim_expires_at =
+           NOW() + ($3::integer * INTERVAL '1 second')
+       FROM candidates AS c
+       WHERE p.id = c.id
+       RETURNING
+         p.id payment_id,
+         p.reference payment_reference,
+         p.user_id payment_user_id,
+         p.amount_minor payment_amount_minor,
+         p.currency payment_currency,
+         p.state payment_state,
+         p.purpose payment_purpose,
+         p.membership_program_id,
+         p.provider_configuration_id,
+         p.provider_name payment_provider_name,
+         p.provider_reference payment_provider_reference,
+         p.deposit_id,
+         p.marketplace_order_id,
+         p.recovery_claim_token`,
+      [staleAfterSeconds, batchSize, recoveryLeaseSeconds],
+    );
+
+    let settled = 0;
+    let unresolved = 0;
+
+    for (const candidate of candidates.rows) {
+      try {
+        if (
+          !candidate.recovery_claim_token ||
+          !candidate.provider_configuration_id
+        ) {
+          unresolved++;
+          continue;
+        }
+
+        const amountMinor = Number(candidate.payment_amount_minor);
+
+        if (
+          !Number.isSafeInteger(amountMinor) ||
+          amountMinor <= 0
+        ) {
+          unresolved++;
+          continue;
+        }
+
+        // Use the provider configuration pinned to this payment.
+        const registration =
+          await this.providers.getProviderRegistrationByConfigurationId(
+            candidate.provider_configuration_id,
+          );
+
+        const configuredProvider = registration.provider;
+
+        if (
+          candidate.payment_provider_name &&
+          candidate.payment_provider_name !== configuredProvider.name
+        ) {
+          unresolved++;
+          continue;
+        }
+
+        // Look up the existing transaction; never initiate another one.
+        const lookup = await configuredProvider.lookupPayment({
+          providerConfiguration: {
+            id: registration.configuration.id,
+            config: registration.configuration.config,
+            credentials: this.providerSecretResolver.resolve(
+              registration.configuration.secretRef,
+            ),
+          },
+          paymentReference: candidate.payment_reference,
+          amountMinor,
+          currency: candidate.payment_currency,
+        });
+
+        if (lookup.status !== 'FOUND' || !lookup.transaction) {
+          unresolved++;
+          continue;
+        }
+
+        const transaction = lookup.transaction;
+
+        // Verify the complete transaction identity before settlement.
+        if (
+          transaction.providerName !== configuredProvider.name ||
+          transaction.paymentReference !== candidate.payment_reference ||
+          transaction.amountMinor !== amountMinor ||
+          transaction.currency !== candidate.payment_currency ||
+          transaction.status !== 'SUCCESS' ||
+          !transaction.providerReference
+        ) {
+          unresolved++;
+          continue;
+        }
+
+        /*
+         * The external provider request happens outside the transaction.
+         * Before settlement, lock the payment and verify that this worker
+         * still owns an unexpired claim and that the payment is unchanged.
+         */
+        const outcome = await this.db.withTransaction(async (client) => {
+          const lockedResult = await client.query<
+            PaymentSettlementRow & {
+              payment_provider_status: string;
+              recovery_claim_token: string | null;
+              recovery_claim_expires_at: Date | string | null;
+            }
+          >(
+            `SELECT
+               id payment_id,
+               reference payment_reference,
+               user_id payment_user_id,
+               amount_minor payment_amount_minor,
+               currency payment_currency,
+               state payment_state,
+               purpose payment_purpose,
+               membership_program_id,
+               provider_configuration_id,
+               provider_name payment_provider_name,
+               provider_reference payment_provider_reference,
+               deposit_id,
+               marketplace_order_id,
+               provider_status payment_provider_status,
+               recovery_claim_token,
+               recovery_claim_expires_at
+             FROM payments
+             WHERE id = $1
+             FOR UPDATE`,
+            [candidate.payment_id],
+          );
+
+          const payment = lockedResult.rows[0];
+
+          if (
+            !payment ||
+            payment.payment_state !== 'PENDING' ||
+            payment.payment_provider_status !== 'INITIALIZING' ||
+            payment.payment_purpose !== 'MARKETPLACE_ORDER' ||
+            payment.payment_reference !== candidate.payment_reference ||
+            payment.payment_user_id !== candidate.payment_user_id ||
+            Number(payment.payment_amount_minor) !== amountMinor ||
+            payment.payment_currency !== candidate.payment_currency ||
+            payment.payment_provider_name !==
+              (candidate.payment_provider_name ?? null) ||
+            payment.marketplace_order_id !==
+              (candidate.marketplace_order_id ?? null) ||
+            payment.provider_configuration_id !==
+              candidate.provider_configuration_id ||
+            payment.recovery_claim_token !==
+              candidate.recovery_claim_token ||
+            !payment.recovery_claim_expires_at ||
+            new Date(payment.recovery_claim_expires_at).getTime() <= Date.now()
+          ) {
+            return 'SKIPPED' as const;
+          }
+
+          await this.settleMarketplacePayment(
+            client,
+            payment,
+            transaction.providerReference,
+            transaction.rawPayload,
+          );
+
+          // Clear this worker's claim in the same transaction.
+          const claimClearResult = await client.query(
+            `UPDATE payments
+             SET
+               recovery_claim_token = NULL,
+               recovery_claim_expires_at = NULL
+             WHERE id = $1
+               AND recovery_claim_token = $2`,
+            [
+              candidate.payment_id,
+              candidate.recovery_claim_token,
+            ],
+          );
+
+          if (claimClearResult.rowCount === 0) {
+            throw new ConflictException(
+              'Marketplace payment recovery claim was not cleared',
+            );
+          }
+
+          return 'SETTLED' as const;
+        });
+
+        if (outcome === 'SETTLED') {
+          settled++;
+        } else if (outcome !== 'SKIPPED') {
+          unresolved++;
+        }
+      } catch {
+        /*
+         * Leave an unsuccessful claim to expire naturally. This avoids
+         * immediately reclaiming and repeatedly querying an unresolved
+         * provider transaction. Exceptions never imply payment failure.
+         */
+        unresolved++;
+      }
+    }
+
+    return {
+      scanned: candidates.rows.length,
+      settled,
+      unresolved,
+    };
+  }
+  private async settleMarketplacePayment(
+    client: PoolClient,
+    payment: PaymentSettlementRow,
+    providerReference: string,
+    rawPayload: unknown,
+  ) {
+    if (!payment.marketplace_order_id) {
+      throw new NotFoundException('Marketplace order not found');
+    }
+
+    const order = await this.lockMarketplaceOrder(
+      client,
+      payment.payment_user_id,
+      payment.marketplace_order_id,
+    );
+    this.validateMarketplaceOrderForPayment(order);
+
+    const orderAmountMinor = Number(order.total_minor);
+    if (
+      !Number.isSafeInteger(orderAmountMinor) ||
+      orderAmountMinor !== Number(payment.payment_amount_minor) ||
+      order.currency !== payment.payment_currency
+    ) {
+      throw new ConflictException(
+        'Marketplace order amount or currency does not match payment',
+      );
+    }
+
+    const itemsResult = await client.query<{ id: string }>(
+      `SELECT id
+       FROM marketplace_order_items
+       WHERE order_id = $1
+       ORDER BY id`,
+      [order.id],
+    );
+
+    if (itemsResult.rows.length === 0) {
+      throw new ConflictException(
+        'Marketplace order has no items to settle',
+      );
+    }
+
+    for (const item of itemsResult.rows) {
+      await this.marketplaceOrderService.consumeInventoryReservation(
+        client,
+        order.id,
+        item.id,
+      );
+    }
+
+    await this.marketplaceOrderService.placePendingPaymentOrder(
+      client,
+      order.id,
+    );
+    await this.marketplaceCartService.finalizePendingOrderCart(
+      client,
+      payment.payment_user_id,
+      order.id,
+    );
+
+    const paymentUpdateResult = await client.query(
+      `UPDATE payments
+       SET state='SUCCESSFUL',
+           provider_reference=$1,
+           provider_status='SUCCESS',
+           provider_metadata=$2
+       WHERE id=$3`,
+      [
+        providerReference,
+        JSON.stringify(rawPayload),
+        payment.payment_id,
+      ],
+    );
+
+    if (paymentUpdateResult.rowCount === 0) {
+      throw new ConflictException(
+        'Marketplace payment could not be finalized',
+      );
+    }
+
+    return {
+      status: 'SUCCESSFUL',
+      paymentReference: payment.payment_reference,
+      alreadyProcessed: false,
+    };
   }
 
   private validateMarketplaceOrderForPayment(

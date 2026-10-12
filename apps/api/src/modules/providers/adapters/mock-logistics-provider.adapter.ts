@@ -5,12 +5,16 @@ import type {
   FindLogisticsOfficesResponse,
   BookLogisticsShipmentRequest,
   BookLogisticsShipmentResponse,
+  LookupLogisticsBookingRequest,
+  LookupLogisticsBookingResponse,
   LogisticsProvider,
 } from '../interfaces/logistics-provider.interface';
 
 export class MockLogisticsProviderAdapter implements LogisticsProvider {
   readonly name = 'mock-logistics';
   readonly runtimeMode = 'test-only' as const;
+
+  private readonly bookings = new Map<string, string>();
 
   async isAvailable(): Promise<boolean> {
     return true;
@@ -70,8 +74,12 @@ export class MockLogisticsProviderAdapter implements LogisticsProvider {
   async bookShipment(
     request: BookLogisticsShipmentRequest,
   ): Promise<BookLogisticsShipmentResponse> {
-    // Stable output makes repeated calls with the same key idempotent in tests.
-    const stableReference = `MOCK-${request.idempotencyKey}`;
+    // Simulate provider-side idempotency for tests.
+    const stableReference =
+      this.bookings.get(request.idempotencyKey) ??
+      `MOCK-${request.idempotencyKey}`;
+    this.bookings.set(request.idempotencyKey, stableReference);
+
     return {
       trackingReference: stableReference,
       rawPayload: {
@@ -79,6 +87,29 @@ export class MockLogisticsProviderAdapter implements LogisticsProvider {
         selectedOfficeId: request.selectedOffice.providerOfficeId,
         originCountry: request.origin.countryCode,
         destinationCountry: request.destination.countryCode,
+      },
+    };
+  }
+
+  async lookupBooking(
+    request: LookupLogisticsBookingRequest,
+  ): Promise<LookupLogisticsBookingResponse> {
+    const trackingReference = this.bookings.get(request.idempotencyKey);
+
+    if (!trackingReference) {
+      return {
+        status: 'NOT_FOUND',
+        rawPayload: { provider: this.name, simulated: true },
+      };
+    }
+
+    return {
+      status: 'FOUND',
+      trackingReference,
+      rawPayload: {
+        provider: this.name,
+        simulated: true,
+        idempotencyKey: request.idempotencyKey,
       },
     };
   }

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { PaymentController } from './payment.controller';
 import { PaymentService } from './payment.service';
+import { MarketplacePaymentRecoveryWorker } from './marketplace-payment-recovery.worker';
 import { ProvidersModule } from '../providers/providers.module';
 import { WalletModule } from '../wallets/wallet.module';
 import { FeatureGuard } from '../../common/features/feature.guard';
@@ -10,6 +11,6 @@ import { MarketplaceCartModule } from '../marketplace-cart/marketplace-cart.modu
 @Module({
   imports: [ProvidersModule, WalletModule, MarketplaceOrderModule, MarketplaceCartModule],
   controllers: [PaymentController],
-  providers: [PaymentService, FeatureGuard],
+  providers: [PaymentService, FeatureGuard, MarketplacePaymentRecoveryWorker],
 })
 export class PaymentModule {}

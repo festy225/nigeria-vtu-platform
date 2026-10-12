@@ -126,6 +126,7 @@ describe('PaymentProviderRouterService', () => {
       runtimeMode: 'production' as const,
       initializePayment: jest.fn(),
       verifyPayment: jest.fn(),
+      lookupPayment: jest.fn().mockResolvedValue({ status: 'UNKNOWN' }),
       verifyWebhook: jest.fn(),
       parseWebhook: jest.fn(),
       isAvailable: jest.fn().mockResolvedValue(true),

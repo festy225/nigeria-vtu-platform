@@ -76,6 +76,14 @@ export interface LogisticsProvider {
     request: BookLogisticsShipmentRequest,
   ): Promise<BookLogisticsShipmentResponse>;
 
+  /**
+   * Look up a prior booking using the original idempotency key.
+   * UNKNOWN must be returned when the provider cannot establish the outcome.
+   */
+  lookupBooking?(
+    request: LookupLogisticsBookingRequest,
+  ): Promise<LookupLogisticsBookingResponse>;
+
   trackShipment(
     request: TrackLogisticsShipmentRequest,
   ): Promise<TrackLogisticsShipmentResponse>;
@@ -116,3 +124,23 @@ export interface BookLogisticsShipmentResponse {
   trackingReference?: string | null;
   rawPayload?: unknown;
 }
+
+export interface LookupLogisticsBookingRequest {
+  /** The exact key originally used for bookShipment. */
+  idempotencyKey: string;
+}
+
+export type LookupLogisticsBookingResponse =
+  | {
+      status: 'FOUND';
+      trackingReference: string;
+      rawPayload?: unknown;
+    }
+  | {
+      status: 'NOT_FOUND';
+      rawPayload?: unknown;
+    }
+  | {
+      status: 'UNKNOWN';
+      rawPayload?: unknown;
+    };

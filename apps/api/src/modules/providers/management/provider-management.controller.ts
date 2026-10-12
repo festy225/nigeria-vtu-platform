@@ -18,6 +18,51 @@ import { RolesGuard } from '../../../common/auth/roles.guard';
 import { Roles } from '../../../common/auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 
+/**
+ * Redact credential-like keys from provider configuration API responses.
+ * This does not modify the stored configuration or adapter configuration.
+ */
+export function redactProviderConfiguration(value: unknown): unknown {
+  const sensitiveKey =
+    /(secret|password|token|credential|authorization|api[_-]?key|private[_-]?key|client[_-]?secret|access[_-]?key|signature)/i;
+
+  if (Array.isArray(value)) {
+    return value.map((item) => redactProviderConfiguration(item));
+  }
+
+  if (value !== null && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+
+    for (const [key, item] of Object.entries(value)) {
+      result[key] =
+        sensitiveKey.test(key) && !/(?:endpoint|url|uri)$/i.test(key)
+          ? '[REDACTED]'
+          : redactProviderConfiguration(item);
+    }
+
+    return result;
+  }
+
+  if (typeof value === 'string') {
+    // Prevent URLs containing username/password credentials from leaking.
+    let sanitized = value.replace(
+      /([a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/gi,
+      '$1[REDACTED]@',
+    );
+
+    // Redact sensitive query parameter values without changing ordinary
+    // parameters or the rest of the URL.
+    sanitized = sanitized.replace(
+      /([?&][^=?&#\s]*(?:secret|password|token|credential|authorization|api[_-]?key|private[_-]?key|client[_-]?secret|access[_-]?key|signature)[^=?&#\s]*=)[^&#\s]*/gi,
+      '$1[REDACTED]',
+    );
+
+    return sanitized;
+  }
+
+  return value;
+}
+
 @Controller('admin/providers')
 @UseGuards(RolesGuard)
 @Roles('ADMIN', 'SUPER_ADMIN')
@@ -30,7 +75,10 @@ export class ProviderManagementController {
 
     return {
       success: true,
-      data: provider,
+      data: {
+        ...provider,
+        baseUrl: redactProviderConfiguration(provider.baseUrl) as string | null,
+      },
     };
   }
 
@@ -62,7 +110,7 @@ export class ProviderManagementController {
         isPrimary: configuration.isPrimary,
         isBackup: configuration.isBackup,
         enabled: configuration.enabled,
-        config: configuration.config,
+        config: redactProviderConfiguration(configuration.config),
         updatedAt: configuration.updatedAt,
       },
     };
@@ -78,7 +126,7 @@ export class ProviderManagementController {
         id: provider.id,
         name: provider.name,
         status: provider.status,
-        baseUrl: provider.baseUrl,
+        baseUrl: redactProviderConfiguration(provider.baseUrl) as string | null,
         capabilities: provider.capabilities,
         createdAt: provider.createdAt,
         updatedAt: provider.updatedAt,
@@ -97,7 +145,7 @@ export class ProviderManagementController {
             id: provider.id,
             name: provider.name,
             status: provider.status,
-            baseUrl: provider.baseUrl,
+            baseUrl: redactProviderConfiguration(provider.baseUrl) as string | null,
             capabilities: provider.capabilities,
             createdAt: provider.createdAt,
             updatedAt: provider.updatedAt,
@@ -123,7 +171,7 @@ export class ProviderManagementController {
         isPrimary: configuration.isPrimary,
         isBackup: configuration.isBackup,
         enabled: configuration.enabled,
-        config: configuration.config,
+        config: redactProviderConfiguration(configuration.config),
         updatedAt: configuration.updatedAt,
       })),
     };

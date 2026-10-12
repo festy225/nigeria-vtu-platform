@@ -39,6 +39,7 @@ describe('PaymentService membership payments', () => {
     verifyWebhook: jest.fn(),
     parseWebhook: jest.fn(),
     isAvailable: jest.fn(),
+    lookupPayment: jest.fn(),
   };
   const providers = {
     getProvider: jest.fn().mockResolvedValue(provider),
@@ -46,6 +47,9 @@ describe('PaymentService membership payments', () => {
     getProviderRegistrationByConfigurationId: jest.fn(),
   };
   const config = { get: jest.fn() };
+  const providerSecretResolver = {
+    resolve: jest.fn().mockReturnValue('resolved-test-secret'),
+  };
   const walletService = { creditWithClient: jest.fn() };
   const marketplaceOrderService = {
   consumeInventoryReservation: jest.fn(),
@@ -65,6 +69,7 @@ const marketplaceCartService = {
     walletService as never,
     marketplaceOrderService as never,
     marketplaceCartService as never,
+    providerSecretResolver as never,
   );
 
   const validRequest = {
@@ -75,6 +80,16 @@ const marketplaceCartService = {
 
   beforeEach(() => {
     jest.clearAllMocks();
+
+    // clearAllMocks() preserves queued mockResolvedValueOnce responses.
+    // Reset stateful query/provider mocks to prevent cross-test leakage.
+    client.query.mockReset();
+    db.query.mockReset();
+    provider.lookupPayment.mockReset();
+    provider.verifyWebhook.mockReset();
+    provider.parseWebhook.mockReset();
+
+    providerSecretResolver.resolve.mockReturnValue('resolved-test-secret');
     db.withTransaction.mockImplementation(
       (work: (value: typeof client) => unknown) => work(client),
     );
@@ -104,6 +119,24 @@ const marketplaceCartService = {
     });
     client.query.mockResolvedValue({ rows: [] });
     db.query.mockResolvedValue({ rows: [] });
+
+    provider.verifyWebhook.mockResolvedValue({
+      valid: true,
+      rawPayload: {},
+    });
+    provider.parseWebhook.mockReturnValue({
+      providerName: provider.name,
+      eventId: 'event-id',
+      eventType: 'payment.success',
+      paymentReference: 'PAY-membership',
+      providerReference: 'provider-ref',
+      amountMinor: 12000,
+      currency: 'USD',
+      status: 'SUCCESS',
+      metadata: {},
+      rawPayload: { eventId: 'event-id' },
+    });
+
     providers.getProviderRegistration.mockResolvedValue({
       provider,
       providerId: 'provider-id',
@@ -967,6 +1000,455 @@ const marketplaceCartService = {
     expect(walletService.creditWithClient).not.toHaveBeenCalled();
   });
 
+  it('reconciles a stale initializing marketplace payment when lookup confirms success', async () => {
+    const candidate = {
+      payment_id: 'payment-id',
+      recovery_claim_token: 'recovery-claim-token',
+      recovery_claim_expires_at: '2099-01-01T00:00:00.000Z',
+      payment_reference: 'PAY-marketplace-recovery',
+      payment_user_id: 'user-id',
+      payment_amount_minor: '12000',
+      payment_currency: 'USD',
+      payment_state: 'PENDING',
+      payment_purpose: 'MARKETPLACE_ORDER',
+      membership_program_id: null,
+      provider_configuration_id: 'provider-configuration-id',
+      payment_provider_name: provider.name,
+      payment_provider_reference: null,
+      deposit_id: null,
+      marketplace_order_id: 'marketplace-order-id',
+    };
+
+    db.query.mockResolvedValueOnce({ rows: [candidate] });
+    provider.lookupPayment.mockResolvedValueOnce({
+      status: 'FOUND',
+      transaction: {
+        providerName: provider.name,
+        paymentReference: candidate.payment_reference,
+        providerReference: 'provider-ref-recovered',
+        amountMinor: 12000,
+        currency: 'USD',
+        status: 'SUCCESS',
+        rawPayload: { transactionId: 'provider-transaction-id' },
+      },
+    });
+
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          ...candidate,
+          payment_provider_status: 'INITIALIZING',
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'marketplace-order-id',
+          customer_id: 'user-id',
+          status: 'PENDING_PAYMENT',
+          total_minor: '12000',
+          currency: 'USD',
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ id: 'item-1' }, { id: 'item-2' }],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const result = await service.recoverInitializingMarketplacePayments();
+
+    expect(result).toEqual({ scanned: 1, settled: 1, unresolved: 0 });
+    expect(
+      providers.getProviderRegistrationByConfigurationId,
+    ).toHaveBeenCalledWith('provider-configuration-id');
+    expect(provider.lookupPayment).toHaveBeenCalledWith({
+      providerConfiguration: {
+        id: 'provider-configuration-id',
+        config: { configuredValue: 'value' },
+        credentials: 'resolved-test-secret',
+      },
+      paymentReference: 'PAY-marketplace-recovery',
+      amountMinor: 12000,
+      currency: 'USD',
+    });
+    expect(providerSecretResolver.resolve).toHaveBeenCalledWith(
+      'configured-secret-reference',
+    );
+    expect(
+      marketplaceOrderService.consumeInventoryReservation,
+    ).toHaveBeenCalledTimes(2);
+    expect(
+      marketplaceOrderService.placePendingPaymentOrder,
+    ).toHaveBeenCalledWith(client, 'marketplace-order-id');
+    expect(
+      marketplaceCartService.finalizePendingOrderCart,
+    ).toHaveBeenCalledWith(client, 'user-id', 'marketplace-order-id');
+
+    const update = (client.query.mock.calls as QueryCall[]).find(([query]) =>
+      String(query).includes("SET state='SUCCESSFUL'"),
+    );
+    expect(update?.[1]).toEqual([
+      'provider-ref-recovered',
+      JSON.stringify({ transactionId: 'provider-transaction-id' }),
+      'payment-id',
+    ]);
+  });
+
+  it('leaves a marketplace payment unresolved when provider lookup is unknown', async () => {
+    db.query.mockResolvedValueOnce({
+      rows: [{
+        payment_id: 'payment-id',
+        recovery_claim_token: 'recovery-claim-token',
+        recovery_claim_expires_at: '2099-01-01T00:00:00.000Z',
+        payment_reference: 'PAY-marketplace-recovery',
+        payment_amount_minor: '12000',
+        payment_currency: 'USD',
+        payment_state: 'PENDING',
+        payment_purpose: 'MARKETPLACE_ORDER',
+        provider_configuration_id: 'provider-configuration-id',
+        payment_provider_name: provider.name,
+      }],
+    });
+    provider.lookupPayment.mockResolvedValueOnce({ status: 'UNKNOWN' });
+
+    const result = await service.recoverInitializingMarketplacePayments();
+
+    expect(result).toEqual({ scanned: 1, settled: 0, unresolved: 1 });
+    expect(db.withTransaction).not.toHaveBeenCalled();
+    expect(client.query).not.toHaveBeenCalled();
+  });
+
+  it('does not look up or settle a marketplace payment without a pinned provider configuration', async () => {
+    db.query.mockResolvedValueOnce({
+      rows: [{
+        payment_id: 'payment-id',
+        recovery_claim_token: 'recovery-claim-token',
+        recovery_claim_expires_at: '2099-01-01T00:00:00.000Z',
+        payment_reference: 'PAY-marketplace-recovery',
+        payment_amount_minor: '12000',
+        payment_currency: 'USD',
+        payment_state: 'PENDING',
+        payment_purpose: 'MARKETPLACE_ORDER',
+        provider_configuration_id: null,
+        payment_provider_name: provider.name,
+      }],
+    });
+
+    const result = await service.recoverInitializingMarketplacePayments();
+
+    expect(result).toEqual({ scanned: 1, settled: 0, unresolved: 1 });
+    expect(
+      providers.getProviderRegistrationByConfigurationId,
+    ).not.toHaveBeenCalled();
+    expect(provider.lookupPayment).not.toHaveBeenCalled();
+    expect(db.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it('does not settle a recovery lookup whose transaction identity does not match', async () => {
+    db.query.mockResolvedValueOnce({
+      rows: [{
+        payment_id: 'payment-id',
+        recovery_claim_token: 'recovery-claim-token',
+        recovery_claim_expires_at: '2099-01-01T00:00:00.000Z',
+        payment_reference: 'PAY-marketplace-recovery',
+        payment_amount_minor: '12000',
+        payment_currency: 'USD',
+        payment_state: 'PENDING',
+        payment_purpose: 'MARKETPLACE_ORDER',
+        provider_configuration_id: 'provider-configuration-id',
+        payment_provider_name: provider.name,
+      }],
+    });
+    provider.lookupPayment.mockResolvedValueOnce({
+      status: 'FOUND',
+      transaction: {
+        providerName: 'different-provider',
+        paymentReference: 'PAY-marketplace-recovery',
+        providerReference: 'provider-ref-recovered',
+        amountMinor: 12000,
+        currency: 'USD',
+        status: 'SUCCESS',
+        rawPayload: {},
+      },
+    });
+
+    const result = await service.recoverInitializingMarketplacePayments();
+
+    expect(result).toEqual({ scanned: 1, settled: 0, unresolved: 1 });
+    expect(db.withTransaction).not.toHaveBeenCalled();
+    expect(client.query).not.toHaveBeenCalled();
+  });
+
+
+it.each([
+  {
+    field: 'provider name',
+    overrides: { providerName: 'different-provider' },
+  },
+  {
+    field: 'payment reference',
+    overrides: { paymentReference: 'different-payment-reference' },
+  },
+  {
+    field: 'provider reference',
+    overrides: { providerReference: '' },
+  },
+  {
+    field: 'amount',
+    overrides: { amountMinor: 12001 },
+  },
+  {
+    field: 'currency',
+    overrides: { currency: 'NGN' },
+  },
+  {
+    field: 'pending provider status',
+    overrides: { status: 'PENDING' },
+  },
+  {
+    field: 'failed provider status',
+    overrides: { status: 'FAILED' },
+  },
+])(
+  'does not settle recovery when the provider lookup has a mismatched $field',
+  async ({ overrides }) => {
+    const candidate = {
+      payment_id: 'payment-id',
+      recovery_claim_token: 'recovery-claim-token',
+      recovery_claim_expires_at: '2099-01-01T00:00:00.000Z',
+      payment_reference: 'PAY-marketplace-recovery',
+      payment_user_id: 'user-id',
+      payment_amount_minor: '12000',
+      payment_currency: 'USD',
+      payment_state: 'PENDING',
+      payment_purpose: 'MARKETPLACE_ORDER',
+      membership_program_id: null,
+      provider_configuration_id: 'provider-configuration-id',
+      payment_provider_name: provider.name,
+      payment_provider_reference: null,
+      deposit_id: null,
+      marketplace_order_id: 'marketplace-order-id',
+    };
+
+    db.query.mockResolvedValueOnce({ rows: [candidate] });
+    provider.lookupPayment.mockResolvedValueOnce({
+      status: 'FOUND',
+      transaction: {
+        providerName: provider.name,
+        paymentReference: candidate.payment_reference,
+        providerReference: 'provider-ref-recovered',
+        amountMinor: 12000,
+        currency: 'USD',
+        status: 'SUCCESS',
+        rawPayload: {},
+        ...overrides,
+      },
+    });
+
+    const result = await service.recoverInitializingMarketplacePayments();
+
+    expect(result).toEqual({ scanned: 1, settled: 0, unresolved: 1 });
+    expect(db.withTransaction).not.toHaveBeenCalled();
+    expect(client.query).not.toHaveBeenCalled();
+  },
+);
+
+it('leaves a marketplace payment unresolved when provider lookup throws', async () => {
+  const candidate = {
+    payment_id: 'payment-id',
+    recovery_claim_token: 'recovery-claim-token',
+    recovery_claim_expires_at: '2099-01-01T00:00:00.000Z',
+    payment_reference: 'PAY-marketplace-recovery',
+    payment_user_id: 'user-id',
+    payment_amount_minor: '12000',
+    payment_currency: 'USD',
+    payment_state: 'PENDING',
+    payment_purpose: 'MARKETPLACE_ORDER',
+    membership_program_id: null,
+    provider_configuration_id: 'provider-configuration-id',
+    payment_provider_name: provider.name,
+    payment_provider_reference: null,
+    deposit_id: null,
+    marketplace_order_id: 'marketplace-order-id',
+  };
+
+  db.query.mockResolvedValueOnce({ rows: [candidate] });
+  provider.lookupPayment.mockRejectedValueOnce(new Error('lookup timeout'));
+
+  const result = await service.recoverInitializingMarketplacePayments();
+
+  expect(result).toEqual({ scanned: 1, settled: 0, unresolved: 1 });
+  expect(db.withTransaction).not.toHaveBeenCalled();
+  expect(client.query).not.toHaveBeenCalled();
+});
+
+
+it.each([
+  {
+    field: 'payment reference',
+    overrides: { payment_reference: 'PAY-different-reference' },
+  },
+  {
+    field: 'customer',
+    overrides: { payment_user_id: 'different-customer-id' },
+  },
+  {
+    field: 'amount',
+    overrides: { payment_amount_minor: '12001' },
+  },
+  {
+    field: 'currency',
+    overrides: { payment_currency: 'NGN' },
+  },
+  {
+    field: 'provider name',
+    overrides: { payment_provider_name: 'different-provider' },
+  },
+  {
+    field: 'marketplace order',
+    overrides: { marketplace_order_id: 'different-marketplace-order-id' },
+  },
+  {
+    field: 'provider configuration',
+    overrides: { provider_configuration_id: 'different-configuration-id' },
+  },
+  {
+    field: 'recovery claim token',
+    overrides: { recovery_claim_token: 'different-recovery-claim-token' },
+  },
+  {
+    field: 'expired recovery claim',
+    overrides: { recovery_claim_expires_at: '2000-01-01T00:00:00.000Z' },
+  },
+  {
+    field: 'payment purpose',
+    overrides: { payment_purpose: 'DEPOSIT' },
+  },
+  {
+    field: 'provider status',
+    overrides: { payment_provider_status: 'SUCCESS' },
+  },
+])(
+  'skips recovery settlement when the locked payment $field changes',
+  async ({ overrides }) => {
+    const candidate = {
+      payment_id: 'payment-id',
+      recovery_claim_token: 'recovery-claim-token',
+      recovery_claim_expires_at: '2099-01-01T00:00:00.000Z',
+      payment_reference: 'PAY-marketplace-recovery',
+      payment_user_id: 'user-id',
+      payment_amount_minor: '12000',
+      payment_currency: 'USD',
+      payment_state: 'PENDING',
+      payment_purpose: 'MARKETPLACE_ORDER',
+      membership_program_id: null,
+      provider_configuration_id: 'provider-configuration-id',
+      payment_provider_name: provider.name,
+      payment_provider_reference: null,
+      deposit_id: null,
+      marketplace_order_id: 'marketplace-order-id',
+    };
+
+    db.query.mockResolvedValueOnce({ rows: [candidate] });
+
+    provider.lookupPayment.mockResolvedValueOnce({
+      status: 'FOUND',
+      transaction: {
+        providerName: provider.name,
+        paymentReference: candidate.payment_reference,
+        providerReference: 'provider-ref-recovered',
+        amountMinor: 12000,
+        currency: 'USD',
+        status: 'SUCCESS',
+        rawPayload: {},
+      },
+    });
+
+    client.query.mockResolvedValueOnce({
+      rows: [{
+        ...candidate,
+        payment_provider_status: 'INITIALIZING',
+        ...overrides,
+      }],
+    });
+
+    const result = await service.recoverInitializingMarketplacePayments();
+
+    expect(result).toEqual({ scanned: 1, settled: 0, unresolved: 0 });
+    expect(db.withTransaction).toHaveBeenCalledTimes(1);
+
+    // Only the locked-payment read should run. No settlement writes should follow.
+    expect(client.query).toHaveBeenCalledTimes(1);
+    expect(
+      marketplaceOrderService.consumeInventoryReservation,
+    ).not.toHaveBeenCalled();
+    expect(
+      marketplaceOrderService.placePendingPaymentOrder,
+    ).not.toHaveBeenCalled();
+    expect(
+      marketplaceCartService.finalizePendingOrderCart,
+    ).not.toHaveBeenCalled();
+  },
+);
+
+it('skips settlement if the payment has already changed before recovery locks it', async () => {
+    db.query.mockResolvedValueOnce({
+      rows: [{
+        payment_id: 'payment-id',
+        recovery_claim_token: 'recovery-claim-token',
+        recovery_claim_expires_at: '2099-01-01T00:00:00.000Z',
+        payment_reference: 'PAY-marketplace-recovery',
+        payment_amount_minor: '12000',
+        payment_currency: 'USD',
+        payment_state: 'PENDING',
+        payment_purpose: 'MARKETPLACE_ORDER',
+        provider_configuration_id: 'provider-configuration-id',
+        payment_provider_name: provider.name,
+      }],
+    });
+    provider.lookupPayment.mockResolvedValueOnce({
+      status: 'FOUND',
+      transaction: {
+        providerName: provider.name,
+        paymentReference: 'PAY-marketplace-recovery',
+        providerReference: 'provider-ref-recovered',
+        amountMinor: 12000,
+        currency: 'USD',
+        status: 'SUCCESS',
+        rawPayload: {},
+      },
+    });
+    client.query.mockResolvedValueOnce({
+      rows: [{
+        payment_id: 'payment-id',
+        recovery_claim_token: 'recovery-claim-token',
+        recovery_claim_expires_at: '2099-01-01T00:00:00.000Z',
+        payment_reference: 'PAY-marketplace-recovery',
+        payment_amount_minor: '12000',
+        payment_currency: 'USD',
+        payment_state: 'SUCCESSFUL',
+        payment_purpose: 'MARKETPLACE_ORDER',
+        provider_configuration_id: 'provider-configuration-id',
+        payment_provider_name: provider.name,
+        payment_provider_status: 'SUCCESS',
+        marketplace_order_id: 'marketplace-order-id',
+      }],
+    });
+
+    const result = await service.recoverInitializingMarketplacePayments();
+
+    expect(result).toEqual({ scanned: 1, settled: 0, unresolved: 0 });
+    expect(db.withTransaction).toHaveBeenCalledTimes(1);
+    expect(
+      marketplaceOrderService.consumeInventoryReservation,
+    ).not.toHaveBeenCalled();
+    expect(
+      marketplaceOrderService.placePendingPaymentOrder,
+    ).not.toHaveBeenCalled();
+    expect(
+      marketplaceCartService.finalizePendingOrderCart,
+    ).not.toHaveBeenCalled();
+  });
+
   it('settles a successful marketplace payment exactly once', async () => {
     configureWebhook('SUCCESS');
 
@@ -1242,12 +1724,15 @@ const marketplaceCartService = {
       providers.getProviderRegistrationByConfigurationId,
     ).toHaveBeenCalledWith('provider-configuration-id');
     expect(providers.getProvider).not.toHaveBeenCalled();
-    expect(provider.verifyWebhook).toHaveBeenCalledWith(
+    expect(providerSecretResolver.resolve).toHaveBeenCalledWith(
+      'configured-secret-reference',
+    );
+expect(provider.verifyWebhook).toHaveBeenCalledWith(
       expect.objectContaining({
         providerConfiguration: {
           id: 'provider-configuration-id',
           config: { configuredValue: 'value' },
-          secretRef: 'configured-secret-reference',
+          credentials: 'resolved-test-secret',
         },
       }),
     );

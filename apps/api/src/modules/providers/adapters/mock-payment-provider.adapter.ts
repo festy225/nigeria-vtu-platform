@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import type {
+  LookupPaymentRequest,
+  LookupPaymentResponse,
   InitializePaymentRequest,
   InitializePaymentResponse,
   PaymentProvider,
@@ -32,6 +34,12 @@ export class MockPaymentProviderAdapter implements PaymentProvider {
         status: 'PENDING',
       },
     });
+  }
+
+  lookupPayment(
+    _request: LookupPaymentRequest,
+  ): Promise<LookupPaymentResponse> {
+    return Promise.resolve({ status: 'UNKNOWN' });
   }
 
   verifyPayment(request: VerifyPaymentRequest): Promise<VerifyPaymentResponse> {
