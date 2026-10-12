@@ -7,6 +7,8 @@ import {
 import { DatabaseService } from '../../infrastructure/database/database.service';
 import { SellerService } from '../sellers/seller.service';
 import { LogisticsProviderRouterService } from '../providers/routing/logistics-provider-router.service';
+import { ProviderSecretResolver } from '../providers/security/provider-secret-resolver.service';
+import type { LogisticsProviderExecutionConfiguration } from '../providers/interfaces/logistics-provider.interface';
 
 @Injectable()
 export class MarketplaceFulfillmentService {
@@ -14,7 +16,26 @@ export class MarketplaceFulfillmentService {
     private readonly database: DatabaseService,
     private readonly sellers: SellerService,
     private readonly logistics: LogisticsProviderRouterService,
+
+    private readonly providerSecretResolver: ProviderSecretResolver,
   ) {}
+
+  private providerExecutionConfiguration(registration: {
+    configuration: {
+      id: string;
+      config: Record<string, unknown>;
+      secretRef: string;
+    };
+  }): LogisticsProviderExecutionConfiguration {
+    return {
+      id: registration.configuration.id,
+      config: registration.configuration.config,
+      credentials: this.providerSecretResolver.resolve(
+        registration.configuration.secretRef,
+      ),
+    };
+  }
+
 
   async createSellerFulfillment(
     orderId: string,
@@ -259,6 +280,7 @@ export class MarketplaceFulfillmentService {
       );
 
     const result = await provider.provider.findOffices({
+providerConfiguration: this.providerExecutionConfiguration(provider),
       origin: {
         addressLine1: fulfillmentRow.origin_snapshot.address_line1,
         addressLine2: fulfillmentRow.origin_snapshot.address_line2,
@@ -366,6 +388,7 @@ export class MarketplaceFulfillmentService {
       );
 
     const result = await provider.provider.checkServiceability({
+providerConfiguration: this.providerExecutionConfiguration(provider),
       origin: {
         addressLine1: fulfillmentRow.origin_snapshot.address_line1,
         addressLine2: fulfillmentRow.origin_snapshot.address_line2,
@@ -478,6 +501,7 @@ export class MarketplaceFulfillmentService {
         );
 
       const result = await provider.provider.findOffices({
+providerConfiguration: this.providerExecutionConfiguration(provider),
         origin: {
           addressLine1: fulfillmentRow.origin_snapshot.address_line1,
           addressLine2: fulfillmentRow.origin_snapshot.address_line2,
@@ -751,6 +775,7 @@ export class MarketplaceFulfillmentService {
 
       try {
         lookup = await provider.provider.lookupBooking({
+providerConfiguration: this.providerExecutionConfiguration(provider),
           idempotencyKey: booking.idempotencyKey,
         });
       } catch {
@@ -775,6 +800,7 @@ export class MarketplaceFulfillmentService {
         // The exact original key is retained.
         try {
           result = await provider.provider.bookShipment({
+providerConfiguration: this.providerExecutionConfiguration(provider),
             idempotencyKey: booking.idempotencyKey,
             origin: {
               addressLine1: row.origin_snapshot.address_line1,
@@ -810,6 +836,7 @@ export class MarketplaceFulfillmentService {
     } else {
       try {
         result = await provider.provider.bookShipment({
+providerConfiguration: this.providerExecutionConfiguration(provider),
           idempotencyKey: booking.idempotencyKey,
           origin: {
             addressLine1: row.origin_snapshot.address_line1,
@@ -930,6 +957,7 @@ export class MarketplaceFulfillmentService {
       );
 
     const tracking = await registration.provider.trackShipment({
+providerConfiguration: this.providerExecutionConfiguration(registration),
       trackingReference: fulfillment.tracking_reference,
     });
 

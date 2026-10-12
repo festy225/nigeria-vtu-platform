@@ -1,3 +1,9 @@
+export interface LogisticsProviderExecutionConfiguration {
+  id: string;
+  config: Record<string, unknown>;
+  credentials: string;
+}
+
 export interface LogisticsLocation {
   addressLine1: string;
   addressLine2?: string | null;
@@ -18,6 +24,7 @@ export interface LogisticsPackage {
 }
 
 export interface CheckLogisticsServiceabilityRequest {
+  providerConfiguration?: LogisticsProviderExecutionConfiguration;
   origin: LogisticsLocation;
   destination: LogisticsLocation;
   packages: LogisticsPackage[];
@@ -49,6 +56,7 @@ export interface LogisticsTrackingEvent {
 }
 
 export interface TrackLogisticsShipmentRequest {
+  providerConfiguration?: LogisticsProviderExecutionConfiguration;
   trackingReference: string;
 }
 
@@ -101,6 +109,7 @@ export interface LogisticsOffice {
 }
 
 export interface FindLogisticsOfficesRequest {
+  providerConfiguration?: LogisticsProviderExecutionConfiguration;
   origin: LogisticsLocation;
   destination: LogisticsLocation;
   radiusKm?: number | null;
@@ -112,6 +121,7 @@ export interface FindLogisticsOfficesResponse {
 }
 
 export interface BookLogisticsShipmentRequest {
+  providerConfiguration?: LogisticsProviderExecutionConfiguration;
   /** Stable per-fulfillment key. Providers should deduplicate bookings using this key. */
   idempotencyKey: string;
   origin: LogisticsLocation;
@@ -126,6 +136,7 @@ export interface BookLogisticsShipmentResponse {
 }
 
 export interface LookupLogisticsBookingRequest {
+  providerConfiguration?: LogisticsProviderExecutionConfiguration;
   /** The exact key originally used for bookShipment. */
   idempotencyKey: string;
 }

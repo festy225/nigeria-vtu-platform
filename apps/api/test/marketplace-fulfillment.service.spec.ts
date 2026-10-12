@@ -34,6 +34,7 @@ describe('MarketplaceFulfillmentService', () => {
       database as never,
       sellers as never,
       logistics as never,
+      { resolve: jest.fn(() => 'test-credentials') } as never,
     );
   });
 
@@ -182,6 +183,11 @@ describe('MarketplaceFulfillmentService', () => {
       });
 
       logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        configuration: {
+          id: 'provider-config-1',
+          config: {},
+          secretRef: 'env:TEST_LOGISTICS_SECRET',
+        },
         provider: {
           findOffices,
         },
@@ -195,6 +201,11 @@ describe('MarketplaceFulfillmentService', () => {
       );
 
       expect(findOffices).toHaveBeenCalledWith({
+          providerConfiguration: {
+            id: 'provider-config-1',
+            config: {},
+            credentials: 'test-credentials',
+          },
         origin: {
           addressLine1: 'Seller Street',
           addressLine2: null,
@@ -309,6 +320,11 @@ describe('MarketplaceFulfillmentService', () => {
       });
 
       logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        configuration: {
+          id: 'provider-config-1',
+          config: {},
+          secretRef: 'env:TEST_LOGISTICS_SECRET',
+        },
         provider: {
           checkServiceability,
         },
@@ -322,6 +338,11 @@ describe('MarketplaceFulfillmentService', () => {
         );
 
       expect(checkServiceability).toHaveBeenCalledWith({
+          providerConfiguration: {
+            id: 'provider-config-1',
+            config: {},
+            credentials: 'test-credentials',
+          },
         origin: {
           addressLine1: 'Seller Street',
           addressLine2: null,
@@ -433,6 +454,11 @@ describe('MarketplaceFulfillmentService', () => {
       });
 
       logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        configuration: {
+          id: 'provider-config-1',
+          config: {},
+          secretRef: 'env:TEST_LOGISTICS_SECRET',
+        },
         provider: {
           findOffices,
         },
@@ -451,6 +477,11 @@ describe('MarketplaceFulfillmentService', () => {
       );
 
       expect(findOffices).toHaveBeenCalledWith({
+          providerConfiguration: {
+            id: 'provider-config-1',
+            config: {},
+            credentials: 'test-credentials',
+          },
         origin: {
           addressLine1: 'Seller Street',
           addressLine2: null,
@@ -503,6 +534,11 @@ describe('MarketplaceFulfillmentService', () => {
       });
 
       logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        configuration: {
+          id: 'provider-config-1',
+          config: {},
+          secretRef: 'env:TEST_LOGISTICS_SECRET',
+        },
         provider: {
           findOffices: jest.fn().mockResolvedValue({
             offices: [],
@@ -531,6 +567,11 @@ describe('MarketplaceFulfillmentService', () => {
       });
 
       logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        configuration: {
+          id: 'provider-config-1',
+          config: {},
+          secretRef: 'env:TEST_LOGISTICS_SECRET',
+        },
         provider: {
           findOffices: jest.fn().mockResolvedValue({
             offices: [
@@ -693,6 +734,11 @@ describe('MarketplaceFulfillmentService', () => {
       });
 
       logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        configuration: {
+          id: 'provider-config-1',
+          config: {},
+          secretRef: 'env:TEST_LOGISTICS_SECRET',
+        },
         provider: {
           bookShipment,
         },
@@ -705,6 +751,11 @@ describe('MarketplaceFulfillmentService', () => {
       );
 
       expect(bookShipment).toHaveBeenCalledWith({
+          providerConfiguration: {
+            id: 'provider-config-1',
+            config: {},
+            credentials: 'test-credentials',
+          },
         idempotencyKey: 'chimzo-fulfillment-fulfillment-1',
         origin: {
           addressLine1: 'Seller Street',
@@ -781,6 +832,11 @@ describe('MarketplaceFulfillmentService', () => {
       });
 
       logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        configuration: {
+          id: 'provider-config-1',
+          config: {},
+          secretRef: 'env:TEST_LOGISTICS_SECRET',
+        },
         provider: {
           bookShipment,
         },
@@ -820,6 +876,11 @@ describe('MarketplaceFulfillmentService', () => {
         });
 
       logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        configuration: {
+          id: 'provider-config-1',
+          config: {},
+          secretRef: 'env:TEST_LOGISTICS_SECRET',
+        },
         provider: {
           bookShipment: jest.fn().mockRejectedValue(new Error('provider timeout')),
         },
@@ -866,6 +927,11 @@ describe('MarketplaceFulfillmentService', () => {
       const bookShipment = jest.fn();
 
       logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        configuration: {
+          id: 'provider-config-1',
+          config: {},
+          secretRef: 'env:TEST_LOGISTICS_SECRET',
+        },
         provider: { lookupBooking, bookShipment },
         providerConfigurationId: 'provider-config-1',
       });
@@ -873,6 +939,11 @@ describe('MarketplaceFulfillmentService', () => {
       const result = await service.bookSellerFulfillment('order-1', 'user-1');
 
       expect(lookupBooking).toHaveBeenCalledWith({
+          providerConfiguration: {
+            id: 'provider-config-1',
+            config: {},
+            credentials: 'test-credentials',
+          },
         idempotencyKey: 'chimzo-fulfillment-fulfillment-1',
       });
       expect(bookShipment).not.toHaveBeenCalled();
@@ -922,6 +993,11 @@ describe('MarketplaceFulfillmentService', () => {
       });
 
       logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        configuration: {
+          id: 'provider-config-1',
+          config: {},
+          secretRef: 'env:TEST_LOGISTICS_SECRET',
+        },
         provider: { lookupBooking, bookShipment },
         providerConfigurationId: 'provider-config-1',
       });
@@ -929,6 +1005,11 @@ describe('MarketplaceFulfillmentService', () => {
       const result = await service.bookSellerFulfillment('order-1', 'user-1');
 
       expect(lookupBooking).toHaveBeenCalledWith({
+          providerConfiguration: {
+            id: 'provider-config-1',
+            config: {},
+            credentials: 'test-credentials',
+          },
         idempotencyKey: 'chimzo-fulfillment-fulfillment-1',
       });
       expect(bookShipment).toHaveBeenCalledTimes(1);
@@ -974,6 +1055,11 @@ describe('MarketplaceFulfillmentService', () => {
       const bookShipment = jest.fn();
 
       logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        configuration: {
+          id: 'provider-config-1',
+          config: {},
+          secretRef: 'env:TEST_LOGISTICS_SECRET',
+        },
         provider: { lookupBooking, bookShipment },
         providerConfigurationId: 'provider-config-1',
       });
@@ -1011,6 +1097,11 @@ describe('MarketplaceFulfillmentService', () => {
       const bookShipment = jest.fn();
 
       logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        configuration: {
+          id: 'provider-config-1',
+          config: {},
+          secretRef: 'env:TEST_LOGISTICS_SECRET',
+        },
         provider: { lookupBooking, bookShipment },
         providerConfigurationId: 'provider-config-1',
       });
@@ -1060,6 +1151,11 @@ describe('MarketplaceFulfillmentService', () => {
       });
 
       logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        configuration: {
+          id: 'provider-config-1',
+          config: {},
+          secretRef: 'env:TEST_LOGISTICS_SECRET',
+        },
         provider: { trackShipment },
         providerConfigurationId: 'provider-config-1',
       });
@@ -1079,6 +1175,11 @@ describe('MarketplaceFulfillmentService', () => {
       );
 
       expect(trackShipment).toHaveBeenCalledWith({
+          providerConfiguration: {
+            id: 'provider-config-1',
+            config: {},
+            credentials: 'test-credentials',
+          },
         trackingReference: 'TRACK-123',
       });
       expect(transaction.query).toHaveBeenCalledWith(
@@ -1161,6 +1262,11 @@ describe('MarketplaceFulfillmentService', () => {
       });
 
       logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        configuration: {
+          id: 'provider-config-1',
+          config: {},
+          secretRef: 'env:TEST_LOGISTICS_SECRET',
+        },
         provider: { trackShipment },
         providerConfigurationId: 'provider-config-1',
       });
@@ -1193,6 +1299,11 @@ describe('MarketplaceFulfillmentService', () => {
       });
 
       logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        configuration: {
+          id: 'provider-config-1',
+          config: {},
+          secretRef: 'env:TEST_LOGISTICS_SECRET',
+        },
         provider: {
           trackShipment: jest.fn().mockResolvedValue({
             status: 'IN_TRANSIT',
