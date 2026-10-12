@@ -220,6 +220,38 @@ export interface MarketplaceCart {
   items: MarketplaceCartItem[];
 }
 
+export interface MarketplaceCheckoutOrder {
+  id: string;
+  orderNumber: string;
+  status: string;
+  currency: CurrencyCode;
+  subtotalMinor: number;
+  totalMinor: number;
+  payment: {
+    status: 'NOT_INITIATED';
+  };
+}
+
+export interface MarketplacePaymentIntent {
+  payment: {
+    id: string;
+    reference: string;
+    userId: string;
+    purpose: string;
+    amountMinor: number;
+    currency: CurrencyCode;
+    state: string;
+  };
+  provider?: {
+    name: string;
+    reference: string;
+    status: string;
+  };
+  checkout?: {
+    url: string;
+  };
+}
+
 export interface MarketplaceCartItem {
   id: string;
   productId: string;
@@ -456,6 +488,18 @@ passwordResetConfirm: (token: string, password: string) =>
 
   marketplaceCart: () =>
     authenticatedFetch<MarketplaceCart>('/marketplace/cart'),
+
+  checkoutMarketplaceCart: (input: { customerAddressId: string }) =>
+    authenticatedFetch<MarketplaceCheckoutOrder>(
+      '/marketplace/cart/checkout',
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
+
+  createMarketplacePaymentIntent: (orderId: string) =>
+    authenticatedFetch<MarketplacePaymentIntent>(
+      `/payments/marketplace-orders/${encodeURIComponent(orderId)}`,
+      { method: 'POST', body: JSON.stringify({}) },
+    ),
 
   addMarketplaceCartItem: (payload: {
     productId: string;

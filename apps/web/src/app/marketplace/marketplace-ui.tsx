@@ -8,6 +8,7 @@ import {
   api,
   type MarketplaceCart,
   type MarketplaceCartItem,
+  type MarketplaceCustomerAddress,
   type MarketplaceProduct,
   type MarketplaceProductDetail,
 } from '@/lib/api';
@@ -265,6 +266,11 @@ export function MarketplaceCartPage() {
   const [loading, setLoading] = useState(true);
   const [busyItemId, setBusyItemId] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
+  const [checkingOut, setCheckingOut] = useState(false);
+  const [deliveryAddresses, setDeliveryAddresses] = useState<MarketplaceCustomerAddress[]>([]);
+  const [selectedAddressId, setSelectedAddressId] = useState('');
+  const [addressesLoading, setAddressesLoading] = useState(false);
+  const [addressError, setAddressError] = useState<string | null>(null);
 
   const loadCart = useCallback(async () => {
     setLoading(true);
@@ -282,6 +288,48 @@ export function MarketplaceCartPage() {
     if (!authLoading && isAuthenticated) void loadCart();
     else if (!authLoading) setLoading(false);
   }, [authLoading, isAuthenticated, loadCart]);
+
+  useEffect(() => {
+    if (authLoading) return;
+
+    if (!isAuthenticated) {
+      setDeliveryAddresses([]);
+      setSelectedAddressId('');
+      setAddressError(null);
+      setAddressesLoading(false);
+      return;
+    }
+
+    let active = true;
+    setAddressesLoading(true);
+    setAddressError(null);
+
+    api.getMarketplaceCustomerAddresses()
+      .then((addresses) => {
+        if (!active) return;
+
+        setDeliveryAddresses(addresses);
+        setSelectedAddressId((current) => {
+          if (current && addresses.some((address) => address.id === current)) {
+            return current;
+          }
+
+          return addresses.find((address) => address.isDefault)?.id
+            ?? addresses[0]?.id
+            ?? '';
+        });
+      })
+      .catch((loadError: unknown) => {
+        if (active) setAddressError(errorMessage(loadError));
+      })
+      .finally(() => {
+        if (active) setAddressesLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [authLoading, isAuthenticated]);
 
   async function updateQuantity(item: MarketplaceCartItem) {
     const quantity = Number(quantities[item.id] ?? item.quantity);
@@ -332,6 +380,51 @@ export function MarketplaceCartPage() {
     }
   }
 
+  async function checkout() {
+    if (checkingOut || !cart?.items.length) return;
+
+    if (!selectedAddressId) {
+      setError('Select a delivery address before continuing to payment.');
+      return;
+    }
+
+    setCheckingOut(true);
+    setError(null);
+
+    try {
+      // The server creates or reuses the pending order and calculates its prices.
+      const order = await api.checkoutMarketplaceCart({
+        customerAddressId: selectedAddressId,
+      });
+      const intent = await api.createMarketplacePaymentIntent(order.id);
+      const checkoutUrl = intent.checkout?.url;
+
+      if (!checkoutUrl) {
+        throw new Error(
+          'The payment provider did not return a checkout link. Your order may still be pending; please try again.',
+        );
+      }
+
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(checkoutUrl);
+      } catch {
+        throw new Error('The payment provider returned an invalid checkout link.');
+      }
+
+      if (parsedUrl.protocol !== 'https:') {
+        throw new Error(
+          'The payment provider returned an unsupported checkout link. Secure HTTPS is required.',
+        );
+      }
+
+      window.location.assign(parsedUrl.toString());
+    } catch (checkoutError) {
+      setError(errorMessage(checkoutError));
+      setCheckingOut(false);
+    }
+  }
+
   return (
     <PageFrame>
       <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
@@ -348,11 +441,71 @@ export function MarketplaceCartPage() {
         <>
           {error && <p role="alert" className="mb-5 text-sm text-rose-200">{error}</p>}
           {cart?.items.length ? (
-            <div className="space-y-4">
-              {cart.items.map((item) => (
-                <CartLine key={item.id} item={item} quantity={quantities[item.id] ?? String(item.quantity)} busy={busyItemId === item.id} onQuantityChange={(value) => setQuantities((current) => ({ ...current, [item.id]: value }))} onUpdate={() => void updateQuantity(item)} onRemove={() => void removeItem(item.id)} />
-              ))}
-            </div>
+            <>
+              <div className="space-y-4">
+                {cart.items.map((item) => (
+                  <CartLine key={item.id} item={item} quantity={quantities[item.id] ?? String(item.quantity)} busy={busyItemId === item.id} onQuantityChange={(value) => setQuantities((current) => ({ ...current, [item.id]: value }))} onUpdate={() => void updateQuantity(item)} onRemove={() => void removeItem(item.id)} />
+                ))}
+              </div>
+              <section className={`${panelClass} mt-6`} aria-labelledby="delivery-address-heading">
+                <h2 id="delivery-address-heading" className="text-lg font-bold text-white">Delivery address</h2>
+                <p className="mt-1 text-sm text-[#E8EEF6]/70">Choose where your order should be delivered.</p>
+
+                {addressesLoading ? (
+                  <p className="mt-4 text-sm text-[#E8EEF6]/70" role="status">Loading saved addresses…</p>
+                ) : addressError ? (
+                  <p className="mt-4 text-sm text-rose-200" role="alert">{addressError}</p>
+                ) : deliveryAddresses.length === 0 ? (
+                  <p className="mt-4 text-sm text-amber-200">
+                    No saved delivery addresses were found. Add an enabled address to your customer account before checkout.
+                  </p>
+                ) : (
+                  <label className="mt-4 block text-sm font-semibold text-[#E8EEF6]">
+                    Select address
+                    <select
+                      value={selectedAddressId}
+                      onChange={(event) => {
+                        setSelectedAddressId(event.target.value);
+                        setAddressError(null);
+                        setError(null);
+                      }}
+                      className="mt-2 block min-h-12 w-full rounded-xl border border-white/20 bg-[#08205B] px-3 py-2 text-sm text-white outline-none focus:border-[#00D4A3]"
+                    >
+                      <option value="">Choose a delivery address</option>
+                      {deliveryAddresses.map((address) => (
+                        <option key={address.id} value={address.id}>
+                          {address.label?.trim()
+                            ? `${address.label} — ${address.addressLine1}, ${address.city}, ${address.countryCode}`
+                            : `${address.recipientName} — ${address.addressLine1}, ${address.city}, ${address.countryCode}`}
+                          {address.isDefault ? ' (Default)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </section>
+              <div className={`${panelClass} mt-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between`}>
+                <div>
+                  <h2 className="text-lg font-bold text-white">Ready to place your order?</h2>
+                  <p className="mt-1 text-sm text-[#E8EEF6]/70">
+                    Review your order and continue to secure payment.
+                    Final prices are confirmed by CHIMZO at checkout.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void checkout()}
+                  disabled={
+                    checkingOut || clearing || Boolean(busyItemId) ||
+                    addressesLoading || deliveryAddresses.length === 0 ||
+                    !selectedAddressId
+                  }
+                  className={actionClass}
+                >
+                  {checkingOut ? 'Preparing checkout…' : 'Proceed to checkout'}
+                </button>
+              </div>
+            </>
           ) : (
             <div className={panelClass}><h2 className="text-xl font-bold text-white">Your cart is empty</h2><p className="mt-2 text-sm text-[#E8EEF6]/70">Explore products and add an item to get started.</p><Link href="/marketplace" className={`${actionClass} mt-5`}>Browse products</Link></div>
           )}

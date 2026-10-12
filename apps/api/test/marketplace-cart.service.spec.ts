@@ -582,12 +582,18 @@ describe('MarketplaceCartService', () => {
     };
     const controller = new MarketplaceCartController(carts as never);
 
-    await controller.checkout({ id: 'authenticated-user-id' } as never);
+    await controller.checkout(
+      { id: 'authenticated-user-id' } as never,
+      { customerAddressId: 'address-id' },
+    );
     await controller.addItem(
       { id: 'authenticated-user-id' } as never,
       { productId: product.id, quantity: 1 },
     );
-    expect(carts.checkout).toHaveBeenCalledWith('authenticated-user-id');
+    expect(carts.checkout).toHaveBeenCalledWith(
+      'authenticated-user-id',
+      'address-id',
+    );
     expect(carts.addItem).toHaveBeenCalledWith(
       'authenticated-user-id',
       { productId: product.id, quantity: 1 },
@@ -597,7 +603,7 @@ describe('MarketplaceCartService', () => {
   it('rejects checkout without creating or accessing another account cart', async () => {
     client.query.mockResolvedValueOnce({ rows: [] });
 
-    await expect(service.checkout('authenticated-user-id')).rejects.toThrow(
+    await expect(service.checkout('authenticated-user-id', 'address-id')).rejects.toThrow(
       BadRequestException,
     );
     expect(client.query.mock.calls[0]?.[1]).toEqual([
@@ -613,13 +619,133 @@ describe('MarketplaceCartService', () => {
   it('rejects an empty owned cart', async () => {
     client.query
       .mockResolvedValueOnce({ rows: [{ id: 'owned-cart-id', pending_order_id: null }] })
+      .mockResolvedValueOnce({ rows: [{
+        id: 'address-id',
+        recipient_name: 'Test Customer',
+        recipient_phone: '+2348000000000',
+        address_line1: '1 Test Street',
+        address_line2: null,
+        city: 'Lagos',
+        state_province: 'Lagos',
+        postal_code: null,
+        country_code: 'NG',
+      }] })
       .mockResolvedValueOnce({ rows: [] });
 
-    await expect(service.checkout('authenticated-user-id')).rejects.toThrow(
+    await expect(service.checkout('authenticated-user-id', 'address-id')).rejects.toThrow(
       BadRequestException,
     );
-    expect(client.query.mock.calls[1]?.[1]).toEqual(['owned-cart-id']);
+    expect(client.query.mock.calls[1]?.[1]).toEqual([
+      'address-id',
+      'authenticated-user-id',
+    ]);
+    expect(client.query.mock.calls[2]?.[1]).toEqual(['owned-cart-id']);
     expect(orders.createPendingPaymentOrder).not.toHaveBeenCalled();
+  });
+
+
+  it('rejects a delivery address that is missing, disabled, or belongs to another customer', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{ id: 'owned-cart-id', pending_order_id: null }],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await expect(
+      service.checkout('authenticated-user-id', 'unavailable-address-id'),
+    ).rejects.toThrow(BadRequestException);
+
+    expect(client.query).toHaveBeenCalledTimes(2);
+    expect(client.query.mock.calls[1]?.[0]).toContain(
+      'customer_id = $2 AND enabled = true',
+    );
+    expect(client.query.mock.calls[1]?.[1]).toEqual([
+      'unavailable-address-id',
+      'authenticated-user-id',
+    ]);
+    expect(orders.createPendingPaymentOrder).not.toHaveBeenCalled();
+  });
+
+  it('rejects checkout when an existing pending order uses a different delivery address', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'owned-cart-id',
+          pending_order_id: 'pending-order-id',
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'new-address-id',
+          recipient_name: 'Test Customer',
+          recipient_phone: '+2348000000000',
+          address_line1: '2 New Street',
+          address_line2: null,
+          city: 'Lagos',
+          state_province: 'Lagos',
+          postal_code: null,
+          country_code: 'NG',
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ customer_address_id: 'previous-address-id' }],
+      });
+
+    await expect(
+      service.checkout('authenticated-user-id', 'new-address-id'),
+    ).rejects.toThrow(ConflictException);
+
+    expect(client.query).toHaveBeenCalledTimes(3);
+    expect(client.query.mock.calls[2]?.[0]).toContain(
+      'FROM marketplace_orders',
+    );
+    expect(orders.getPendingPaymentOrder).not.toHaveBeenCalled();
+    expect(orders.createPendingPaymentOrder).not.toHaveBeenCalled();
+  });
+
+  it('stores the selected delivery address as an order snapshot', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{ id: 'owned-cart-id', pending_order_id: null }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'address-id',
+          recipient_name: 'Test Customer',
+          recipient_phone: '+2348000000000',
+          address_line1: '1 Test Street',
+          address_line2: 'Flat 4',
+          city: 'Lagos',
+          state_province: 'Lagos',
+          postal_code: '100001',
+          country_code: 'NG',
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          productId: product.id,
+          variantId: null,
+          quantity: 2,
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [{ id: 'pending-order-id' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'owned-cart-id' }] });
+
+    await service.checkout('authenticated-user-id', 'address-id');
+
+    const updateCall = client.query.mock.calls[3];
+    expect(updateCall?.[0]).toContain('delivery_address_snapshot');
+    expect(updateCall?.[1]?.[0]).toBe('address-id');
+    expect(JSON.parse(String(updateCall?.[1]?.[1]))).toEqual({
+      recipientName: 'Test Customer',
+      recipientPhone: '+2348000000000',
+      addressLine1: '1 Test Street',
+      addressLine2: 'Flat 4',
+      city: 'Lagos',
+      stateProvince: 'Lagos',
+      postalCode: '100001',
+      countryCode: 'NG',
+    });
   });
 
   it('converts only the authenticated user cart to a backend-priced pending order', async () => {
@@ -627,6 +753,17 @@ describe('MarketplaceCartService', () => {
       .mockResolvedValueOnce({
         rows: [{ id: 'owned-cart-id', pending_order_id: null }],
       })
+      .mockResolvedValueOnce({ rows: [{
+        id: 'address-id',
+        recipient_name: 'Test Customer',
+        recipient_phone: '+2348000000000',
+        address_line1: '1 Test Street',
+        address_line2: null,
+        city: 'Lagos',
+        state_province: 'Lagos',
+        postal_code: null,
+        country_code: 'NG',
+      }] })
       .mockResolvedValueOnce({
         rows: [{
           productId: product.id,
@@ -637,9 +774,10 @@ describe('MarketplaceCartService', () => {
           sellerId: 'untrusted-seller',
         }],
       })
+      .mockResolvedValueOnce({ rows: [{ id: 'pending-order-id' }] })
       .mockResolvedValueOnce({ rows: [{ id: 'owned-cart-id' }] });
 
-    const result = await service.checkout('authenticated-user-id');
+    const result = await service.checkout('authenticated-user-id', 'address-id');
 
     expect(orders.createPendingPaymentOrder).toHaveBeenCalledWith(
       client,
@@ -656,8 +794,20 @@ describe('MarketplaceCartService', () => {
     expect(client.query.mock.calls[0]?.[1]).toEqual([
       'authenticated-user-id',
     ]);
-    expect(client.query.mock.calls[1]?.[0]).toContain('ORDER BY product_id');
-    expect(client.query.mock.calls[2]?.[1]).toEqual([
+    expect(client.query.mock.calls[1]?.[0]).toContain(
+      'marketplace_customer_addresses',
+    );
+    expect(client.query.mock.calls[2]?.[0]).toContain('ORDER BY product_id');
+    expect(client.query.mock.calls[3]?.[0]).toContain(
+      'delivery_address_snapshot',
+    );
+    expect(client.query.mock.calls[3]?.[1]).toEqual([
+      'address-id',
+      expect.any(String),
+      'pending-order-id',
+      'authenticated-user-id',
+    ]);
+    expect(client.query.mock.calls[4]?.[1]).toEqual([
       'pending-order-id',
       'owned-cart-id',
       'authenticated-user-id',
@@ -665,14 +815,29 @@ describe('MarketplaceCartService', () => {
   });
 
   it('returns the existing pending order on repeated checkout without reserving again', async () => {
-    client.query.mockResolvedValueOnce({
-      rows: [{
-        id: 'owned-cart-id',
-        pending_order_id: 'pending-order-id',
-      }],
-    });
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'owned-cart-id',
+          pending_order_id: 'pending-order-id',
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [{
+        id: 'address-id',
+        recipient_name: 'Test Customer',
+        recipient_phone: '+2348000000000',
+        address_line1: '1 Test Street',
+        address_line2: null,
+        city: 'Lagos',
+        state_province: 'Lagos',
+        postal_code: null,
+        country_code: 'NG',
+      }] })
+      .mockResolvedValueOnce({
+        rows: [{ customer_address_id: 'address-id' }],
+      });
 
-    const result = await service.checkout('authenticated-user-id');
+    const result = await service.checkout('authenticated-user-id', 'address-id');
 
     expect(orders.getPendingPaymentOrder).toHaveBeenCalledWith(
       client,
@@ -680,7 +845,7 @@ describe('MarketplaceCartService', () => {
       'pending-order-id',
     );
     expect(orders.createPendingPaymentOrder).not.toHaveBeenCalled();
-    expect(client.query).toHaveBeenCalledTimes(1);
+    expect(client.query).toHaveBeenCalledTimes(3);
     expect(result).toMatchObject({
       id: 'pending-order-id',
       payment: { status: 'NOT_INITIATED' },

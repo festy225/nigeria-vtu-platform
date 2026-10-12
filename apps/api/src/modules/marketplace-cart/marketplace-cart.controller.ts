@@ -14,6 +14,7 @@ import { FeatureGuard } from '../../common/features/feature.guard';
 import { RequiresFeature } from '../../common/features/feature.decorator';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { AddMarketplaceCartItemDto } from './dto/add-marketplace-cart-item.dto';
+import { CheckoutMarketplaceCartDto } from './dto/checkout-marketplace-cart.dto';
 import { UpdateMarketplaceCartItemDto } from './dto/update-marketplace-cart-item.dto';
 import { MarketplaceCartService } from './marketplace-cart.service';
 
@@ -29,8 +30,11 @@ export class MarketplaceCartController {
   }
 
   @Post('checkout')
-  checkout(@CurrentUser() user: AuthenticatedUser) {
-    return this.carts.checkout(user.id);
+  checkout(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CheckoutMarketplaceCartDto,
+  ) {
+    return this.carts.checkout(user.id, dto.customerAddressId);
   }
 
   @Post('items')

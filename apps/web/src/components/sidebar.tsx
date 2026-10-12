@@ -32,7 +32,7 @@ const links = [
     href: '/dashboard/account',
     icon: '○',
   },
-   {
+  {
     label: 'Admin workspace',
     href: '/dashboard/admin',
     icon: '◆',

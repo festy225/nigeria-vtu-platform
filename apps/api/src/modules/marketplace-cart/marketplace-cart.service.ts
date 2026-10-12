@@ -334,7 +334,7 @@ export class MarketplaceCartService {
     }
   }
 
-  async checkout(userId: string) {
+  async checkout(userId: string, customerAddressId: string) {
     return this.database.withTransaction(async (client) => {
       const cartResult = await client.query<{
         id: string;
@@ -350,7 +350,65 @@ export class MarketplaceCartService {
       if (!cart) {
         throw new BadRequestException('Cannot checkout an empty cart');
       }
+
+      const addressResult = await client.query<{
+        id: string;
+        recipient_name: string;
+        recipient_phone: string;
+        address_line1: string;
+        address_line2: string | null;
+        city: string;
+        state_province: string | null;
+        postal_code: string | null;
+        country_code: string;
+      }>(
+        `SELECT id, recipient_name, recipient_phone,
+                address_line1, address_line2, city,
+                state_province, postal_code, country_code
+         FROM marketplace_customer_addresses
+         WHERE id = $1 AND customer_id = $2 AND enabled = true
+         FOR SHARE`,
+        [customerAddressId, userId],
+      );
+
+      const address = addressResult.rows[0];
+      if (!address) {
+        throw new BadRequestException(
+          'Select a valid, enabled delivery address belonging to your account',
+        );
+      }
+
+      const addressSnapshot = {
+        recipientName: address.recipient_name,
+        recipientPhone: address.recipient_phone,
+        addressLine1: address.address_line1,
+        addressLine2: address.address_line2,
+        city: address.city,
+        stateProvince: address.state_province,
+        postalCode: address.postal_code,
+        countryCode: address.country_code,
+      };
+
       if (cart.pending_order_id) {
+        const orderAddress = await client.query<{
+          customer_address_id: string | null;
+        }>(
+          `SELECT customer_address_id
+           FROM marketplace_orders
+           WHERE id = $1 AND customer_id = $2
+           FOR UPDATE`,
+          [cart.pending_order_id, userId],
+        );
+
+        if (
+          !orderAddress.rows[0] ||
+          orderAddress.rows[0].customer_address_id !== customerAddressId
+        ) {
+          throw new ConflictException(
+            'A pending order already exists with a different delivery address. Resolve that order before checking out again.',
+          );
+        }
+
         const order = await this.orders.getPendingPaymentOrder(
           client,
           userId,
@@ -382,6 +440,30 @@ export class MarketplaceCartService {
           quantity: item.quantity,
         })),
       );
+      const savedAddress = await client.query<{ id: string }>(
+        `UPDATE marketplace_orders
+         SET customer_address_id = $1,
+             delivery_address_snapshot = $2::jsonb,
+             updated_at = now()
+         WHERE id = $3
+           AND customer_id = $4
+           AND status = 'PENDING_PAYMENT'
+           AND customer_address_id IS NULL
+         RETURNING id`,
+        [
+          customerAddressId,
+          JSON.stringify(addressSnapshot),
+          order.id,
+          userId,
+        ],
+      );
+
+      if (!savedAddress.rows[0]) {
+        throw new ConflictException(
+          'Could not attach the selected delivery address to the pending order',
+        );
+      }
+
       const linked = await client.query<{ id: string }>(
         `UPDATE marketplace_carts
          SET pending_order_id = $1, updated_at = now()
