@@ -94,6 +94,64 @@ export interface SellerApplication {
   created_at: string;
   updated_at: string;
 }
+export interface SellerFulfillment {
+  id: string;
+  order_id: string;
+  seller_id: string;
+  status: string;
+  provider_configuration_id?: string | null;
+  tracking_reference?: string | null;
+  origin_snapshot?: Record<string, unknown> | null;
+  destination_snapshot?: Record<string, unknown> | null;
+  selected_office_id?: string | null;
+  selected_office_snapshot?: Record<string, unknown> | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface MarketplaceCustomerAddress {
+  id: string;
+  label?: string | null;
+  recipientName: string;
+  recipientPhone: string;
+  addressLine1: string;
+  addressLine2?: string | null;
+  city: string;
+  stateProvince?: string | null;
+  postalCode?: string | null;
+  countryCode: string;
+  isDefault?: boolean;
+}
+
+export interface MarketplaceSellerLocation {
+  id: string;
+  location_name: string;
+  address_line1: string;
+  city: string;
+  country_code: string;
+  enabled?: boolean;
+  is_default?: boolean;
+}
+
+export interface LogisticsOffice {
+  providerOfficeId: string;
+  name: string;
+  address: string;
+  distanceKm?: number;
+  phone?: string;
+  pickupAvailable: boolean;
+  deliveryAvailable: boolean;
+}
+
+export interface LogisticsTrackingEvent {
+  providerEventId?: string;
+  status: string;
+  providerStatus?: string;
+  description?: string;
+  location?: string;
+  occurredAt: string;
+}
+
 export interface SellerOrderItem {
   id: string;
   productId: string;
@@ -345,6 +403,48 @@ passwordResetConfirm: (token: string, password: string) =>
   getSellerOrder: (orderId: string) =>
     authenticatedFetch<SellerOrderDetail>(
       `/sellers/orders/${encodeURIComponent(orderId)}`,
+    ),
+  getSellerFulfillment: (orderId: string) =>
+    authenticatedFetch<SellerFulfillment>(
+      `/marketplace/fulfillment/${encodeURIComponent(orderId)}`,
+    ),
+  getMarketplaceCustomerAddresses: () =>
+    authenticatedFetch<MarketplaceCustomerAddress[]>(
+      '/marketplace/customer-addresses',
+    ),
+  getMarketplaceSellerLocations: () =>
+    authenticatedFetch<MarketplaceSellerLocation[]>('/sellers/locations'),
+  checkFulfillmentServiceability: (orderId: string) =>
+    authenticatedFetch<Record<string, unknown>>(
+      '/marketplace/fulfillment/serviceability',
+      { method: 'POST', body: JSON.stringify({ orderId }) },
+    ),
+  createSellerFulfillment: (input: {
+    orderId: string;
+    customerAddressId: string;
+    sellerLocationId: string;
+  }) =>
+    authenticatedFetch<SellerFulfillment>('/marketplace/fulfillment', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  getFulfillmentOffices: (orderId: string, radiusKm = 25) =>
+    authenticatedFetch<LogisticsOffice[]>(
+      `/marketplace/fulfillment/${encodeURIComponent(orderId)}/offices?radiusKm=${encodeURIComponent(String(radiusKm))}`,
+    ),
+  selectFulfillmentOffice: (orderId: string, providerOfficeId: string) =>
+    authenticatedFetch<SellerFulfillment>(
+      `/marketplace/fulfillment/${encodeURIComponent(orderId)}/office`,
+      { method: 'POST', body: JSON.stringify({ providerOfficeId }) },
+    ),
+  bookSellerFulfillment: (orderId: string) =>
+    authenticatedFetch<SellerFulfillment>(
+      `/marketplace/fulfillment/${encodeURIComponent(orderId)}/book`,
+      { method: 'POST', body: JSON.stringify({}) },
+    ),
+  getFulfillmentTracking: (orderId: string) =>
+    authenticatedFetch<LogisticsTrackingEvent[]>(
+      `/marketplace/fulfillment/${encodeURIComponent(orderId)}/tracking`,
     ),
   marketplaceProducts: () =>
     fetchJson<MarketplaceProduct[]>('/marketplace/products'),

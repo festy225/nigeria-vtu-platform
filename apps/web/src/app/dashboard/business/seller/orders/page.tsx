@@ -81,6 +81,17 @@ const [loading, setLoading] = useState(true);
 const [detailLoading, setDetailLoading] = useState(false);
 const [error, setError] = useState('');
 const [detailError, setDetailError] = useState('');
+const [fulfillment, setFulfillment] = useState<import('@/lib/api').SellerFulfillment | null>(null);
+const [fulfillmentAddresses, setFulfillmentAddresses] = useState<import('@/lib/api').MarketplaceCustomerAddress[]>([]);
+const [fulfillmentLocations, setFulfillmentLocations] = useState<import('@/lib/api').MarketplaceSellerLocation[]>([]);
+const [fulfillmentOffices, setFulfillmentOffices] = useState<import('@/lib/api').LogisticsOffice[]>([]);
+const [fulfillmentTracking, setFulfillmentTracking] = useState<import('@/lib/api').LogisticsTrackingEvent[]>([]);
+const [fulfillmentAddressId, setFulfillmentAddressId] = useState('');
+const [fulfillmentLocationId, setFulfillmentLocationId] = useState('');
+const [fulfillmentOfficeId, setFulfillmentOfficeId] = useState('');
+const [fulfillmentBusy, setFulfillmentBusy] = useState(false);
+const [fulfillmentError, setFulfillmentError] = useState('');
+const [fulfillmentMessage, setFulfillmentMessage] = useState('');
 const [refreshing, setRefreshing] = useState(false);
 
 const loadOrders = useCallback(async (isRefresh = false) => {
@@ -131,6 +142,107 @@ try {
   setDetailLoading(false);
 }
 
+};
+
+
+const loadFulfillment = async () => {
+  if (!selectedOrder) return;
+  setFulfillmentBusy(true);
+  setFulfillmentError('');
+  try {
+    const [addresses, locations] = await Promise.all([
+      api.getMarketplaceCustomerAddresses(),
+      api.getMarketplaceSellerLocations(),
+    ]);
+    setFulfillmentAddresses(addresses);
+    setFulfillmentLocations(locations.filter((x) => x.enabled !== false));
+    try {
+      setFulfillment(await api.getSellerFulfillment(selectedOrder.id));
+    } catch (e) {
+      if ((e as { status?: number }).status !== 404) throw e;
+      setFulfillment(null);
+    }
+  } catch (e) {
+    setFulfillmentError(e instanceof Error ? e.message : 'Could not load fulfillment.');
+  } finally {
+    setFulfillmentBusy(false);
+  }
+};
+
+const createFulfillment = async () => {
+  if (!selectedOrder || !fulfillmentAddressId || !fulfillmentLocationId) {
+    setFulfillmentError('Select a customer address and seller dispatch location.');
+    return;
+  }
+  setFulfillmentBusy(true);
+  setFulfillmentError('');
+  try {
+    await api.createSellerFulfillment({
+      orderId: selectedOrder.id,
+      customerAddressId: fulfillmentAddressId,
+      sellerLocationId: fulfillmentLocationId,
+    });
+    await loadFulfillment();
+  } catch (e) {
+    setFulfillmentError(e instanceof Error ? e.message : 'Could not create fulfillment.');
+  } finally {
+    setFulfillmentBusy(false);
+  }
+};
+
+const loadFulfillmentOffices = async () => {
+  if (!selectedOrder) return;
+  setFulfillmentBusy(true);
+  setFulfillmentError('');
+  try {
+    setFulfillmentOffices(await api.getFulfillmentOffices(selectedOrder.id));
+  } catch (e) {
+    setFulfillmentError(e instanceof Error ? e.message : 'Could not load offices.');
+  } finally {
+    setFulfillmentBusy(false);
+  }
+};
+
+const chooseFulfillmentOffice = async () => {
+  if (!selectedOrder || !fulfillmentOfficeId) return;
+  setFulfillmentBusy(true);
+  setFulfillmentError('');
+  try {
+    setFulfillment(await api.selectFulfillmentOffice(selectedOrder.id, fulfillmentOfficeId));
+  } catch (e) {
+    setFulfillmentError(e instanceof Error ? e.message : 'Could not select office.');
+  } finally {
+    setFulfillmentBusy(false);
+  }
+};
+
+const bookFulfillment = async () => {
+  if (!selectedOrder || fulfillment?.status !== 'READY_FOR_FULFILLMENT') {
+    setFulfillmentError('Fulfillment must be ready before booking.');
+    return;
+  }
+  setFulfillmentBusy(true);
+  setFulfillmentError('');
+  try {
+    setFulfillment(await api.bookSellerFulfillment(selectedOrder.id));
+  } catch (e) {
+    setFulfillmentError(e instanceof Error ? e.message : 'Booking failed.');
+  } finally {
+    setFulfillmentBusy(false);
+  }
+};
+
+const loadFulfillmentTracking = async () => {
+  if (!selectedOrder) return;
+  setFulfillmentBusy(true);
+  setFulfillmentError('');
+  try {
+    setFulfillmentTracking(await api.getFulfillmentTracking(selectedOrder.id));
+  } catch (e) {
+    setFulfillmentError(e instanceof Error ? e.message : 'Could not load tracking.');
+  } finally {
+    setFulfillmentBusy(false);
+  }
 };
 
 const closeOrder = () => {
@@ -473,6 +585,117 @@ share of each order.
                 follow CHIMZO&apos;s configured marketplace rules.
               </p>
             </div>
+
+            <section className="space-y-4 rounded-2xl border border-slate-200 p-4 sm:p-5" aria-label="Delivery and fulfillment">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-bold text-[#08205B]">Delivery &amp; Fulfillment</h3>
+                  <p className="mt-1 text-sm text-slate-500">Configure dispatch, choose a logistics office, and follow delivery progress.</p>
+                </div>
+                <button type="button" disabled={fulfillmentBusy} onClick={() => void loadFulfillment()} className="rounded-lg border border-[#2F80ED]/30 px-4 py-2 text-sm font-semibold text-[#2F80ED] hover:bg-blue-50 disabled:opacity-50">
+                  {fulfillmentBusy ? 'Loading…' : 'Load fulfillment'}
+                </button>
+              </div>
+
+              {fulfillmentError && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{fulfillmentError}</p>}
+              {fulfillmentMessage && <p role="status" className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-700">{fulfillmentMessage}</p>}
+
+              {!fulfillment ? (
+                <div className="space-y-4">
+                  <p className="text-sm text-slate-600">Load fulfillment to retrieve the available customer addresses and your dispatch locations.</p>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="block text-sm font-medium text-slate-700">
+                      Customer delivery address
+                      <select value={fulfillmentAddressId} onChange={(e) => setFulfillmentAddressId(e.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 bg-white p-3" disabled={fulfillmentBusy}>
+                        <option value="">Select delivery address</option>
+                        {fulfillmentAddresses.map((address) => (
+                          <option key={address.id} value={address.id}>
+                            {[address.label, address.recipientName, address.addressLine1, address.city, address.countryCode].filter(Boolean).join(' — ')}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block text-sm font-medium text-slate-700">
+                      Seller dispatch location
+                      <select value={fulfillmentLocationId} onChange={(e) => setFulfillmentLocationId(e.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 bg-white p-3" disabled={fulfillmentBusy}>
+                        <option value="">Select dispatch location</option>
+                        {fulfillmentLocations.map((location) => (
+                          <option key={location.id} value={location.id}>
+                            {[location.location_name, location.address_line1, location.city, location.country_code].filter(Boolean).join(' — ')}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <button type="button" disabled={fulfillmentBusy || !fulfillmentAddressId || !fulfillmentLocationId} onClick={() => void createFulfillment()} className="rounded-lg bg-[#08205B] px-4 py-3 text-sm font-semibold text-white hover:bg-[#123477] disabled:cursor-not-allowed disabled:opacity-50">
+                    {fulfillmentBusy ? 'Processing…' : 'Create fulfillment'}
+                  </button>
+                  {fulfillmentAddresses.length === 0 && fulfillmentLocations.length === 0 && (
+                    <p className="text-xs text-slate-500">If no options appear, load fulfillment again or check that customer addresses and seller locations have been configured.</p>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="text-sm font-semibold text-slate-600">Fulfillment status</span>
+                    <StatusBadge status={fulfillment.status} />
+                  </div>
+                  {fulfillment.tracking_reference && (
+                    <p className="text-sm text-slate-700">Tracking reference: <span className="font-semibold">{fulfillment.tracking_reference}</span></p>
+                  )}
+
+                  <div className="space-y-3 rounded-xl bg-slate-50 p-4">
+                    <h4 className="font-semibold text-[#08205B]">Logistics office</h4>
+                    <button type="button" disabled={fulfillmentBusy} onClick={() => void loadFulfillmentOffices()} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50">
+                      Find available offices
+                    </button>
+                    {fulfillmentOffices.length > 0 && (
+                      <div className="space-y-3">
+                        <label className="block text-sm font-medium text-slate-700">
+                          Select office
+                          <select value={fulfillmentOfficeId} onChange={(e) => setFulfillmentOfficeId(e.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 bg-white p-3">
+                            <option value="">Choose a logistics office</option>
+                            {fulfillmentOffices.map((office) => (
+                              <option key={office.providerOfficeId} value={office.providerOfficeId}>
+                                {office.name} — {office.address}{office.distanceKm != null ? ` (${office.distanceKm} km)` : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <button type="button" disabled={fulfillmentBusy || !fulfillmentOfficeId} onClick={() => void chooseFulfillmentOffice()} className="rounded-lg border border-[#2F80ED]/30 px-4 py-2 text-sm font-semibold text-[#2F80ED] hover:bg-blue-50 disabled:opacity-50">
+                          Select office
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap gap-3">
+                    <button type="button" disabled={fulfillmentBusy || fulfillment.status !== 'READY_FOR_FULFILLMENT'} onClick={() => void bookFulfillment()} className="rounded-lg bg-[#08205B] px-4 py-3 text-sm font-semibold text-white hover:bg-[#123477] disabled:cursor-not-allowed disabled:opacity-50">
+                      Book delivery
+                    </button>
+                    <button type="button" disabled={fulfillmentBusy} onClick={() => void loadFulfillmentTracking()} className="rounded-lg border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+                      Refresh tracking
+                    </button>
+                  </div>
+
+                  {fulfillmentTracking.length > 0 && (
+                    <div>
+                      <h4 className="mb-3 font-semibold text-[#08205B]">Tracking history</h4>
+                      <ol className="space-y-3 border-l-2 border-slate-200 pl-4">
+                        {fulfillmentTracking.map((event, index) => (
+                          <li key={`${event.occurredAt}-${event.status}-${index}`} className="relative">
+                            <p className="font-semibold text-slate-800">{humanizeStatus(event.status)}</p>
+                            {event.description && <p className="text-sm text-slate-600">{event.description}</p>}
+                            {event.location && <p className="text-sm text-slate-500">{event.location}</p>}
+                            <p className="text-xs text-slate-400">{formatDate(event.occurredAt)}</p>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
           </div>
         ) : null}
       </section>

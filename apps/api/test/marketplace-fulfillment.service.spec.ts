@@ -679,6 +679,10 @@ describe('MarketplaceFulfillmentService', () => {
         .mockResolvedValueOnce({
           rowCount: 1,
           rows: [],
+        })
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [],
         });
 
       const bookShipment = jest.fn().mockResolvedValue({
@@ -701,6 +705,7 @@ describe('MarketplaceFulfillmentService', () => {
       );
 
       expect(bookShipment).toHaveBeenCalledWith({
+        idempotencyKey: 'chimzo-fulfillment-fulfillment-1',
         origin: {
           addressLine1: 'Seller Street',
           addressLine2: null,
@@ -730,7 +735,11 @@ describe('MarketplaceFulfillmentService', () => {
 
       expect(transaction.query).toHaveBeenLastCalledWith(
         expect.stringContaining('tracking_reference = $1'),
-        ['TEST-TRACK-123', 'fulfillment-1'],
+        [
+          'TEST-TRACK-123',
+          'fulfillment-1',
+          'chimzo-fulfillment-fulfillment-1',
+        ],
       );
 
       expect(result).toEqual({
@@ -741,6 +750,93 @@ describe('MarketplaceFulfillmentService', () => {
         trackingReference: 'TEST-TRACK-123',
         status: 'BOOKED',
       });
+    });
+
+    it('does not report BOOKED when finalization updates no fulfillment', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+
+      transaction.query
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [fulfillmentRow],
+        })
+        .mockResolvedValueOnce({
+          rowCount: 2,
+          rows: [{ quantity: 2 }, { quantity: 1 }],
+        })
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [],
+        })
+        .mockResolvedValueOnce({
+          rowCount: 0,
+          rows: [],
+        });
+
+      const bookShipment = jest.fn().mockResolvedValue({
+        trackingReference: 'TEST-TRACK-123',
+        rawPayload: {
+          provider: 'test-logistics',
+        },
+      });
+
+      logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        provider: {
+          bookShipment,
+        },
+        providerConfigurationId: 'provider-config-1',
+      });
+
+      await expect(
+        service.bookSellerFulfillment('order-1', 'user-1'),
+      ).rejects.toThrow('could not be finalized');
+
+      expect(bookShipment).toHaveBeenCalledTimes(1);
+      expect(transaction.query).toHaveBeenLastCalledWith(
+        expect.stringContaining('tracking_reference = $1'),
+        [
+          'TEST-TRACK-123',
+          'fulfillment-1',
+          'chimzo-fulfillment-fulfillment-1',
+        ],
+      );
+    });
+
+    it('retains the booking claim when the provider outcome is uncertain', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+
+      transaction.query
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [fulfillmentRow],
+        })
+        .mockResolvedValueOnce({
+          rowCount: 2,
+          rows: [{ quantity: 2 }, { quantity: 1 }],
+        })
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [],
+        });
+
+      logistics.getProviderRegistrationByConfigurationId.mockResolvedValue({
+        provider: {
+          bookShipment: jest.fn().mockRejectedValue(new Error('provider timeout')),
+        },
+        providerConfigurationId: 'provider-config-1',
+      });
+
+      await expect(
+        service.bookSellerFulfillment('order-1', 'user-1'),
+      ).rejects.toThrow('booking outcome is uncertain');
+
+      expect(transaction.query).toHaveBeenLastCalledWith(
+        expect.stringContaining("status = 'BOOKING_IN_PROGRESS'"),
+        [
+          'chimzo-fulfillment-fulfillment-1',
+          'fulfillment-1',
+        ],
+      );
     });
   });
 

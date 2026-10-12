@@ -551,7 +551,9 @@ export class MarketplaceFulfillmentService {
     orderId: string,
     userId: string,
   ) {
-    return this.database.withTransaction(async (client) => {
+    // Claim the booking in a short transaction. Never hold a database
+    // transaction open while waiting for an external logistics provider.
+    const booking = await this.database.withTransaction(async (client) => {
       const sellerId = await this.sellers.getSellerIdByUserId(userId);
 
       const fulfillment = await client.query<{
@@ -561,6 +563,8 @@ export class MarketplaceFulfillmentService {
         status: string;
         provider_configuration_id: string | null;
         tracking_reference: string | null;
+        booking_idempotency_key: string | null;
+        booking_started_at: Date | string | null;
         origin_snapshot: {
           address_line1: string;
           address_line2?: string | null;
@@ -610,6 +614,8 @@ export class MarketplaceFulfillmentService {
             status,
             provider_configuration_id,
             tracking_reference,
+            booking_idempotency_key,
+            booking_started_at,
             origin_snapshot,
             destination_snapshot,
             selected_office_id,
@@ -629,45 +635,68 @@ export class MarketplaceFulfillmentService {
         );
       }
 
-      const fulfillmentRow = fulfillment.rows[0];
+      const row = fulfillment.rows[0];
 
-      if (fulfillmentRow.status === 'BOOKED') {
+      if (row.status === 'BOOKED') {
         throw new ConflictException(
           'Fulfillment shipment is already booked',
         );
       }
 
-      if (fulfillmentRow.status !== 'READY_FOR_FULFILLMENT') {
+      if (
+        row.status !== 'READY_FOR_FULFILLMENT' &&
+        row.status !== 'BOOKING_IN_PROGRESS'
+      ) {
         throw new ConflictException(
           'Fulfillment shipment can only be booked when it is ready for fulfillment',
         );
       }
 
-      if (!fulfillmentRow.provider_configuration_id) {
+      if (!row.provider_configuration_id) {
         throw new BadRequestException(
           'Fulfillment logistics provider configuration is missing',
         );
       }
 
-      if (
-        !fulfillmentRow.selected_office_id ||
-        !fulfillmentRow.selected_office_snapshot
-      ) {
+      if (!row.selected_office_id || !row.selected_office_snapshot) {
         throw new BadRequestException(
           'A logistics pickup office must be selected before booking',
         );
       }
 
-      const items = await client.query<{
-        quantity: number;
-      }>(
+      let idempotencyKey =
+        row.booking_idempotency_key ??
+        `chimzo-fulfillment-${row.id}`;
+
+      if (row.status === 'BOOKING_IN_PROGRESS') {
+        const startedAt = row.booking_started_at
+          ? new Date(row.booking_started_at).getTime()
+          : 0;
+
+        const recoveryWindowMs = 5 * 60 * 1000;
+        const isStale =
+          !Number.isFinite(startedAt) ||
+          startedAt <= 0 ||
+          Date.now() - startedAt >= recoveryWindowMs;
+
+        if (!isStale) {
+          throw new ConflictException(
+            'Shipment booking is already in progress. Retry after the recovery window if the result remains uncertain.',
+          );
+        }
+
+        // Reuse the exact same key on recovery. Do not create a new
+        // provider-side shipment identity for the same fulfillment.
+      }
+
+      const items = await client.query<{ quantity: number }>(
         `
           SELECT quantity
           FROM marketplace_fulfillment_items
           WHERE fulfillment_id = $1
           ORDER BY id
         `,
-        [fulfillmentRow.id],
+        [row.id],
       );
 
       if (items.rowCount === 0) {
@@ -676,59 +705,112 @@ export class MarketplaceFulfillmentService {
         );
       }
 
-      const provider =
-        await this.logistics.getProviderRegistrationByConfigurationId(
-          fulfillmentRow.provider_configuration_id,
-        );
+      await client.query(
+        `
+          UPDATE marketplace_fulfillments
+          SET
+            status = 'BOOKING_IN_PROGRESS',
+            booking_idempotency_key = $1,
+            booking_started_at = now(),
+            updated_at = now()
+          WHERE id = $2
+        `,
+        [idempotencyKey, row.id],
+      );
 
-      const result = await provider.provider.bookShipment({
+      return {
+        fulfillment: row,
+        sellerId,
+        idempotencyKey,
+        items: items.rows,
+      };
+    });
+
+    const row = booking.fulfillment;
+    const provider =
+      await this.logistics.getProviderRegistrationByConfigurationId(
+        row.provider_configuration_id!,
+      );
+
+    let result: Awaited<
+      ReturnType<typeof provider.provider.bookShipment>
+    >;
+
+    try {
+      result = await provider.provider.bookShipment({
+        idempotencyKey: booking.idempotencyKey,
         origin: {
-          addressLine1: fulfillmentRow.origin_snapshot.address_line1,
-          addressLine2: fulfillmentRow.origin_snapshot.address_line2,
-          city: fulfillmentRow.origin_snapshot.city,
-          stateProvince: fulfillmentRow.origin_snapshot.state_province,
-          postalCode: fulfillmentRow.origin_snapshot.postal_code,
-          countryCode: fulfillmentRow.origin_snapshot.country_code,
-          latitude: fulfillmentRow.origin_snapshot.latitude,
-          longitude: fulfillmentRow.origin_snapshot.longitude,
+          addressLine1: row.origin_snapshot.address_line1,
+          addressLine2: row.origin_snapshot.address_line2,
+          city: row.origin_snapshot.city,
+          stateProvince: row.origin_snapshot.state_province,
+          postalCode: row.origin_snapshot.postal_code,
+          countryCode: row.origin_snapshot.country_code,
+          latitude: row.origin_snapshot.latitude,
+          longitude: row.origin_snapshot.longitude,
         },
         destination: {
-          addressLine1: fulfillmentRow.destination_snapshot.address_line1,
-          addressLine2: fulfillmentRow.destination_snapshot.address_line2,
-          city: fulfillmentRow.destination_snapshot.city,
-          stateProvince: fulfillmentRow.destination_snapshot.state_province,
-          postalCode: fulfillmentRow.destination_snapshot.postal_code,
-          countryCode: fulfillmentRow.destination_snapshot.country_code,
-          latitude: fulfillmentRow.destination_snapshot.latitude,
-          longitude: fulfillmentRow.destination_snapshot.longitude,
+          addressLine1: row.destination_snapshot.address_line1,
+          addressLine2: row.destination_snapshot.address_line2,
+          city: row.destination_snapshot.city,
+          stateProvince: row.destination_snapshot.state_province,
+          postalCode: row.destination_snapshot.postal_code,
+          countryCode: row.destination_snapshot.country_code,
+          latitude: row.destination_snapshot.latitude,
+          longitude: row.destination_snapshot.longitude,
         },
-        packages: items.rows.map((item) => ({
+        packages: booking.items.map((item) => ({
           quantity: item.quantity,
         })),
-        selectedOffice: fulfillmentRow.selected_office_snapshot,
+        selectedOffice: row.selected_office_snapshot!,
       });
+    } catch {
+      // The provider may have created the shipment before the connection
+      // failed. Keep BOOKING_IN_PROGRESS so a retry cannot immediately
+      // issue a fresh booking. Recovery reuses the same idempotency key.
+      throw new ConflictException(
+        'Shipment booking outcome is uncertain. The booking key has been retained for safe recovery.',
+      );
+    }
 
-      await client.query(
+    // Persist the provider result in a separate, short transaction.
+    // If persistence fails, the retained key allows safe recovery with a
+    // provider that honors idempotency keys.
+    await this.database.withTransaction(async (client) => {
+      const update = await client.query(
         `
           UPDATE marketplace_fulfillments
           SET
             tracking_reference = $1,
             status = 'BOOKED',
+            booking_started_at = NULL,
             updated_at = now()
           WHERE id = $2
+            AND status = 'BOOKING_IN_PROGRESS'
+            AND booking_idempotency_key = $3
         `,
-        [result.trackingReference ?? null, fulfillmentRow.id],
+        [
+          result.trackingReference ?? null,
+          row.id,
+          booking.idempotencyKey,
+        ],
       );
 
-      return {
-        fulfillmentId: fulfillmentRow.id,
-        orderId: fulfillmentRow.order_id,
-        sellerId: fulfillmentRow.seller_id,
-        providerConfigurationId: provider.providerConfigurationId,
-        trackingReference: result.trackingReference ?? null,
-        status: 'BOOKED',
-      };
+      if (update.rowCount !== 1) {
+        throw new ConflictException(
+          'The shipment provider returned a booking result, but the fulfillment could not be finalized. The booking key has been retained for recovery.',
+        );
+      }
     });
+
+    return {
+      fulfillmentId: row.id,
+      orderId: row.order_id,
+      sellerId: row.seller_id,
+      providerConfigurationId: provider.providerConfigurationId,
+      trackingReference: result.trackingReference ?? null,
+      status: 'BOOKED',
+    };
   }
 
   async trackSellerFulfillment(orderId: string, userId: string) {

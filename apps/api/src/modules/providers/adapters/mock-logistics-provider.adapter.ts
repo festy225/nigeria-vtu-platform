@@ -70,8 +70,10 @@ export class MockLogisticsProviderAdapter implements LogisticsProvider {
   async bookShipment(
     request: BookLogisticsShipmentRequest,
   ): Promise<BookLogisticsShipmentResponse> {
+    // Stable output makes repeated calls with the same key idempotent in tests.
+    const stableReference = `MOCK-${request.idempotencyKey}`;
     return {
-      trackingReference: `MOCK-${request.selectedOffice.providerOfficeId}-SHIPMENT`,
+      trackingReference: stableReference,
       rawPayload: {
         provider: this.name,
         selectedOfficeId: request.selectedOffice.providerOfficeId,

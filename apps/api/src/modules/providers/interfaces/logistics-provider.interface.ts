@@ -104,6 +104,8 @@ export interface FindLogisticsOfficesResponse {
 }
 
 export interface BookLogisticsShipmentRequest {
+  /** Stable per-fulfillment key. Providers should deduplicate bookings using this key. */
+  idempotencyKey: string;
   origin: LogisticsLocation;
   destination: LogisticsLocation;
   packages: LogisticsPackage[];
