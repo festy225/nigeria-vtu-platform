@@ -909,6 +909,10 @@ describe('MarketplaceFulfillmentService', () => {
       status: 'READY_FOR_FULFILLMENT',
       provider_configuration_id: 'provider-config-1',
       tracking_reference: null,
+      booking_idempotency_key: null,
+      booking_started_at: null,
+      booking_recovery_token: null,
+      booking_recovery_claimed_at: null,
       origin_snapshot: {
         address_line1: 'Seller Street',
         address_line2: null,
@@ -1029,6 +1033,7 @@ describe('MarketplaceFulfillmentService', () => {
           'TEST-TRACK-123',
           'fulfillment-1',
           'chimzo-fulfillment-fulfillment-1',
+          null,
         ],
       );
 
@@ -1093,6 +1098,7 @@ describe('MarketplaceFulfillmentService', () => {
           'TEST-TRACK-123',
           'fulfillment-1',
           'chimzo-fulfillment-fulfillment-1',
+          null,
         ],
       );
     });
@@ -1135,8 +1141,35 @@ describe('MarketplaceFulfillmentService', () => {
         [
           'chimzo-fulfillment-fulfillment-1',
           'fulfillment-1',
+          null,
         ],
       );
+    });
+
+    it('rejects a concurrent recovery while another recovery lease is active', async () => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+
+      const recoveryRow = {
+        ...fulfillmentRow,
+        status: 'BOOKING_IN_PROGRESS',
+        booking_idempotency_key: 'chimzo-fulfillment-fulfillment-1',
+        booking_started_at: new Date(Date.now() - 10 * 60 * 1000),
+        booking_recovery_token: '11111111-1111-4111-8111-111111111111',
+        booking_recovery_claimed_at: new Date(Date.now() - 30 * 1000),
+      };
+
+      transaction.query.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [recoveryRow],
+      });
+
+      await expect(
+        service.bookSellerFulfillment('order-1', 'user-1'),
+      ).rejects.toThrow('recovery is already claimed');
+
+      expect(transaction.query).toHaveBeenCalledTimes(1);
+      expect(logistics.getProviderRegistrationByConfigurationId)
+        .not.toHaveBeenCalled();
     });
 
     it('recovers an existing provider booking without creating another shipment', async () => {
@@ -1192,6 +1225,7 @@ describe('MarketplaceFulfillmentService', () => {
           'RECOVERED-TRACK-123',
           'fulfillment-1',
           'chimzo-fulfillment-fulfillment-1',
+          expect.any(String),
         ],
       );
       expect(result).toEqual({
@@ -1264,6 +1298,7 @@ describe('MarketplaceFulfillmentService', () => {
           'RETRIED-TRACK-456',
           'fulfillment-1',
           'chimzo-fulfillment-fulfillment-1',
+          expect.any(String),
         ],
       );
       expect(result.status).toBe('BOOKED');

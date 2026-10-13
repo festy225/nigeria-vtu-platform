@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   BadRequestException,
   ConflictException,
@@ -589,6 +590,8 @@ providerConfiguration: this.providerExecutionConfiguration(provider),
         tracking_reference: string | null;
         booking_idempotency_key: string | null;
         booking_started_at: Date | string | null;
+        booking_recovery_token: string | null;
+        booking_recovery_claimed_at: Date | string | null;
         origin_snapshot: {
           address_line1: string;
           address_line2?: string | null;
@@ -640,6 +643,8 @@ providerConfiguration: this.providerExecutionConfiguration(provider),
             tracking_reference,
             booking_idempotency_key,
             booking_started_at,
+            booking_recovery_token,
+            booking_recovery_claimed_at,
             origin_snapshot,
             destination_snapshot,
             selected_office_id,
@@ -691,6 +696,7 @@ providerConfiguration: this.providerExecutionConfiguration(provider),
       let idempotencyKey =
         row.booking_idempotency_key ??
         `chimzo-fulfillment-${row.id}`;
+      let recoveryToken: string | null = null;
 
       if (row.status === 'BOOKING_IN_PROGRESS') {
         const startedAt = row.booking_started_at
@@ -708,6 +714,22 @@ providerConfiguration: this.providerExecutionConfiguration(provider),
             'Shipment booking is already in progress. Retry after the recovery window if the result remains uncertain.',
           );
         }
+
+        const claimedAt = row.booking_recovery_claimed_at
+          ? new Date(row.booking_recovery_claimed_at).getTime()
+          : 0;
+        const claimIsActive =
+          Number.isFinite(claimedAt) &&
+          claimedAt > 0 &&
+          Date.now() - claimedAt < recoveryWindowMs;
+
+        if (claimIsActive) {
+          throw new ConflictException(
+            'Shipment recovery is already claimed. Retry after the recovery lease expires.',
+          );
+        }
+
+        recoveryToken = randomUUID();
 
         // Reuse the exact same key on recovery. Do not create a new
         // provider-side shipment identity for the same fulfillment.
@@ -736,16 +758,20 @@ providerConfiguration: this.providerExecutionConfiguration(provider),
             status = 'BOOKING_IN_PROGRESS',
             booking_idempotency_key = $1,
             booking_started_at = now(),
+            booking_recovery_token = $3::uuid,
+            booking_recovery_claimed_at =
+              CASE WHEN $3::uuid IS NULL THEN NULL ELSE now() END,
             updated_at = now()
           WHERE id = $2
         `,
-        [idempotencyKey, row.id],
+        [idempotencyKey, row.id, recoveryToken],
       );
 
       return {
         fulfillment: row,
         sellerId,
         idempotencyKey,
+        recoveryToken,
         items: items.rows,
       };
     });
@@ -883,15 +909,19 @@ providerConfiguration: this.providerExecutionConfiguration(provider),
             tracking_reference = $1,
             status = 'BOOKED',
             booking_started_at = NULL,
+            booking_recovery_token = NULL,
+            booking_recovery_claimed_at = NULL,
             updated_at = now()
           WHERE id = $2
             AND status = 'BOOKING_IN_PROGRESS'
             AND booking_idempotency_key = $3
+            AND booking_recovery_token IS NOT DISTINCT FROM $4::uuid
         `,
         [
           result.trackingReference ?? null,
           row.id,
           booking.idempotencyKey,
+          booking.recoveryToken,
         ],
       );
 
