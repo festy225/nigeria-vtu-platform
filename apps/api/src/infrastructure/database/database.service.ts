@@ -27,16 +27,32 @@ export class DatabaseService implements OnModuleDestroy {
 
   async withTransaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
+    let releaseError: Error | undefined;
+
     try {
       await client.query('BEGIN');
       const result = await work(client);
       await client.query('COMMIT');
       return result;
     } catch (error) {
-      await client.query('ROLLBACK');
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        releaseError =
+          rollbackError instanceof Error
+            ? rollbackError
+            : new Error(String(rollbackError));
+      }
+
+      // Preserve the original transaction error for the caller.
       throw error;
     } finally {
-      client.release();
+      // A failed rollback means this connection must not be reused.
+      if (releaseError) {
+        client.release(releaseError);
+      } else {
+        client.release();
+      }
     }
   }
 
