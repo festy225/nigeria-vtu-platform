@@ -1,4 +1,8 @@
-import { NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { MarketplaceFulfillmentService } from '../src/modules/marketplace-fulfillment/marketplace-fulfillment.service';
 
 describe('MarketplaceFulfillmentService', () => {
@@ -36,6 +40,241 @@ describe('MarketplaceFulfillmentService', () => {
       logistics as never,
       { resolve: jest.fn(() => 'test-credentials') } as never,
     );
+  });
+
+
+  describe('createSellerFulfillment', () => {
+    const orderRow = {
+      id: 'order-1',
+      status: 'PLACED',
+      customer_id: 'customer-1',
+    };
+
+    const sellerLocationRow = {
+      id: 'location-1',
+      location_name: 'Seller Warehouse',
+      contact_name: 'Seller Contact',
+      contact_phone: '08000000000',
+      address_line1: '1 Seller Street',
+      address_line2: null,
+      city: 'Lagos',
+      state_province: 'Lagos',
+      postal_code: '100001',
+      country_code: 'NG',
+      latitude: 6.5244,
+      longitude: 3.3792,
+    };
+
+    const customerAddressRow = {
+      id: 'address-1',
+      recipient_name: 'Customer',
+      recipient_phone: '08100000000',
+      address_line1: '2 Customer Street',
+      address_line2: null,
+      city: 'Abuja',
+      state_province: 'FCT',
+      postal_code: '900001',
+      country_code: 'NG',
+      latitude: 9.0765,
+      longitude: 7.3986,
+    };
+
+    beforeEach(() => {
+      sellers.getSellerIdByUserId.mockResolvedValue('seller-1');
+    });
+
+    it('rejects when the marketplace order does not exist', async () => {
+      transaction.query.mockResolvedValueOnce({
+        rowCount: 0,
+        rows: [],
+      });
+
+      await expect(
+        service.createSellerFulfillment(
+          'missing-order',
+          'user-1',
+          'address-1',
+          'location-1',
+        ),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      expect(transaction.query).toHaveBeenCalledTimes(1);
+      expect(logistics.getProviderRegistration).not.toHaveBeenCalled();
+    });
+
+    it('rejects orders that are not eligible for fulfillment', async () => {
+      transaction.query.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ ...orderRow, status: 'PENDING_PAYMENT' }],
+      });
+
+      await expect(
+        service.createSellerFulfillment(
+          'order-1',
+          'user-1',
+          'address-1',
+          'location-1',
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      expect(transaction.query).toHaveBeenCalledTimes(1);
+      expect(logistics.getProviderRegistration).not.toHaveBeenCalled();
+    });
+
+    it('rejects duplicate fulfillment for the same seller and order', async () => {
+      transaction.query
+        .mockResolvedValueOnce({ rowCount: 1, rows: [orderRow] })
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [{ id: 'existing-fulfillment' }],
+        });
+
+      await expect(
+        service.createSellerFulfillment(
+          'order-1',
+          'user-1',
+          'address-1',
+          'location-1',
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      expect(transaction.query).toHaveBeenCalledTimes(2);
+      expect(logistics.getProviderRegistration).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the order contains no items for this seller', async () => {
+      transaction.query
+        .mockResolvedValueOnce({ rowCount: 1, rows: [orderRow] })
+        .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+        .mockResolvedValueOnce({ rowCount: 0, rows: [] });
+
+      await expect(
+        service.createSellerFulfillment(
+          'order-1',
+          'user-1',
+          'address-1',
+          'location-1',
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(transaction.query).toHaveBeenCalledTimes(3);
+      expect(logistics.getProviderRegistration).not.toHaveBeenCalled();
+    });
+
+    it('rejects a missing or disabled seller pickup location', async () => {
+      transaction.query
+        .mockResolvedValueOnce({ rowCount: 1, rows: [orderRow] })
+        .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [{ id: 'order-item-1', quantity: 2 }],
+        })
+        .mockResolvedValueOnce({ rowCount: 0, rows: [] });
+
+      await expect(
+        service.createSellerFulfillment(
+          'order-1',
+          'user-1',
+          'address-1',
+          'invalid-location',
+        ),
+      ).rejects.toThrow(
+        'Seller pickup location not found or disabled',
+      );
+
+      expect(transaction.query).toHaveBeenCalledTimes(4);
+      expect(logistics.getProviderRegistration).not.toHaveBeenCalled();
+    });
+
+    it('rejects a missing or disabled customer delivery address', async () => {
+      transaction.query
+        .mockResolvedValueOnce({ rowCount: 1, rows: [orderRow] })
+        .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [{ id: 'order-item-1', quantity: 2 }],
+        })
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [sellerLocationRow],
+        })
+        .mockResolvedValueOnce({ rowCount: 0, rows: [] });
+
+      await expect(
+        service.createSellerFulfillment(
+          'order-1',
+          'user-1',
+          'invalid-address',
+          'location-1',
+        ),
+      ).rejects.toThrow(
+        'Customer delivery address not found or disabled',
+      );
+
+      expect(transaction.query).toHaveBeenCalledTimes(5);
+      expect(logistics.getProviderRegistration).not.toHaveBeenCalled();
+    });
+
+    it('creates fulfillment and item records using address snapshots', async () => {
+      transaction.query
+        .mockResolvedValueOnce({ rowCount: 1, rows: [orderRow] })
+        .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [{ id: 'order-item-1', quantity: 2 }],
+        })
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [sellerLocationRow],
+        })
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [customerAddressRow],
+        })
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [{ id: 'fulfillment-1' }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      logistics.getProviderRegistration.mockResolvedValue({
+        providerConfigurationId: 'provider-config-1',
+      });
+
+      const result = await service.createSellerFulfillment(
+        'order-1',
+        'user-1',
+        'address-1',
+        'location-1',
+      );
+
+      expect(result).toEqual({
+        id: 'fulfillment-1',
+        orderId: 'order-1',
+        sellerId: 'seller-1',
+        status: 'PENDING',
+      });
+
+      expect(logistics.getProviderRegistration).toHaveBeenCalledTimes(1);
+
+      expect(transaction.query).toHaveBeenNthCalledWith(
+        6,
+        expect.stringContaining('INSERT INTO marketplace_fulfillments'),
+        [
+          'order-1',
+          'seller-1',
+          'provider-config-1',
+          JSON.stringify(sellerLocationRow),
+          JSON.stringify(customerAddressRow),
+        ],
+      );
+
+      expect(transaction.query).toHaveBeenNthCalledWith(
+        7,
+        expect.stringContaining('INSERT INTO marketplace_fulfillment_items'),
+        ['fulfillment-1', 'order-1', 'order-item-1', 2],
+      );
+    });
   });
 
   describe('getSellerFulfillment', () => {

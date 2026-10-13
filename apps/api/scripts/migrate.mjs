@@ -72,7 +72,8 @@ const migrations = [
   '0039_marketplace_fulfillment_booking_recovery.sql',
   '0040_marketplace_order_delivery_address.sql',
   '0041_provider_primary_route_uniqueness.sql',
-  '0042_marketplace_payment_recovery_claims.sql'
+  '0042_marketplace_payment_recovery_claims.sql',
+  '0043_marketplace_fulfillment_order_seller_uniqueness.sql'
 ];
 
 const migrationsDirectory = resolve(repoRoot, 'database/migrations');
