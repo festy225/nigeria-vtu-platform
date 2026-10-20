@@ -7,6 +7,7 @@ import {
 import type { PoolClient } from 'pg';
 import type { CreateProviderDto } from '../dto/create-provider.dto';
 import type { CreateProviderConfigurationDto } from '../dto/create-provider-configuration.dto';
+import type { UpdateProviderConfigurationDto } from '../dto/update-provider-configuration.dto';
 import { DatabaseService } from '../../../infrastructure/database/database.service';
 import { AuditService } from '../../audit/audit.service';
 import {
@@ -331,6 +332,79 @@ export class ProviderRegistryService {
     }
   }
 
+  async updateProviderConfiguration(
+    id: string,
+    dto: UpdateProviderConfigurationDto,
+    updatedBy?: string,
+  ): Promise<ProviderConfigurationRecord> {
+    if (dto.secretRef !== undefined && !/^env:[A-Z][A-Z0-9_]*$/.test(dto.secretRef)) {
+      throw new BadRequestException('secretRef must use the env:VARIABLE_NAME format');
+    }
+    if (dto.priority !== undefined && (!Number.isInteger(dto.priority) || dto.priority < 1 || dto.priority > 32767)) {
+      throw new BadRequestException('priority must be an integer from 1 to 32767');
+    }
+    if (dto.config !== undefined && (dto.config === null || typeof dto.config !== 'object' || Array.isArray(dto.config))) {
+      throw new BadRequestException('config must be an object');
+    }
+
+    try {
+      return await this.database.withTransaction(async (client: PoolClient) => {
+        const found = await client.query<ProviderConfigurationRow>(
+          `SELECT id, provider_id, service_id, priority, is_primary, is_backup, enabled, secret_ref, config, updated_at
+           FROM provider_configurations WHERE id = $1 FOR UPDATE`,
+          [id],
+        );
+        if (found.rowCount === 0) throw new NotFoundException('Provider configuration not found');
+
+        const current = found.rows[0];
+        const priority = dto.priority ?? current.priority;
+        const enabled = dto.enabled ?? current.enabled;
+        const isBackup = dto.isBackup ?? current.is_backup;
+        const isPrimary = dto.isPrimary ?? (dto.enabled === false ? false : current.is_primary);
+        const secretRef = dto.secretRef ?? current.secret_ref;
+        const config = dto.config ?? current.config ?? {};
+
+        if (isPrimary && isBackup) throw new BadRequestException('A provider configuration cannot be both primary and backup');
+        if (isPrimary && !enabled) throw new BadRequestException('A primary provider configuration must be enabled');
+
+        if (isPrimary) {
+          await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`provider-primary-route:${current.service_id ?? 'GLOBAL'}`]);
+          await client.query(
+            `UPDATE provider_configurations
+             SET is_primary = false, updated_at = now(), updated_by = $2
+             WHERE service_id IS NOT DISTINCT FROM $1 AND enabled = true AND is_primary = true AND id <> $3`,
+            [current.service_id, updatedBy ?? null, id],
+          );
+        }
+
+        const result = await client.query<ProviderConfigurationRow>(
+          `UPDATE provider_configurations
+           SET priority = $2, is_primary = $3, is_backup = $4, enabled = $5,
+               secret_ref = $6, config = $7::jsonb, updated_by = $8, updated_at = now()
+           WHERE id = $1
+           RETURNING id, provider_id, service_id, priority, is_primary, is_backup, enabled, secret_ref, config, updated_at`,
+          [id, priority, isPrimary, isBackup, enabled, secretRef, JSON.stringify(config), updatedBy ?? null],
+        );
+        const updated = this.mapConfiguration(result.rows[0]);
+
+        if (updatedBy) {
+          await this.audit.record({
+            actorId: updatedBy, action: 'PROVIDER_CONFIGURATION_UPDATED',
+            resourceType: 'PROVIDER_CONFIGURATION', resourceId: updated.id,
+            beforeData: { providerId: current.provider_id, serviceId: current.service_id, priority: current.priority, isPrimary: current.is_primary, isBackup: current.is_backup, enabled: current.enabled },
+            afterData: { providerId: updated.providerId, serviceId: updated.serviceId, priority: updated.priority, isPrimary: updated.isPrimary, isBackup: updated.isBackup, enabled: updated.enabled },
+          }, client);
+        }
+        return updated;
+      });
+    } catch (error) {
+      if (error instanceof NotFoundException || error instanceof BadRequestException) throw error;
+      if (error instanceof Error && 'code' in error && error.code === '23505') {
+        throw new ConflictException('The update conflicts with an existing provider configuration');
+      }
+      throw error;
+    }
+  }
   async findConfigurations(
     providerId?: string,
     serviceId?: string,

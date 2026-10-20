@@ -1,3 +1,4 @@
+import { FinanceModule } from './modules/finance/finance.module';
 import { Global, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
@@ -23,6 +24,7 @@ import { MarketplaceCustomerAddressesModule } from './modules/marketplace-custom
 @Global()
 @Module({
   imports: [
+    FinanceModule,
     ConfigModule.forRoot({ isGlobal: true, cache: true, expandVariables: true }),
     ThrottlerModule.forRoot({ throttlers: [{ ttl: 60_000, limit: 100 }] }),
     DatabaseModule,

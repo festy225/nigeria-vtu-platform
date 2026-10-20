@@ -381,54 +381,145 @@ if (phone) {
   }
 
   async requestPasswordReset(identifier: string) {
-    const found = await this.db.query<{ id: string }>(`SELECT id FROM users WHERE email=$1 OR phone=$1`, [identifier.trim().toLowerCase()]);
-    if (found.rows[0]) {
-      const raw = randomBytes(32).toString('hex');
-      await this.db.query(`INSERT INTO auth_tokens (user_id,token_hash,purpose,expires_at) VALUES ($1,$2,'PASSWORD_RESET',now()+interval '30 minutes')`, [found.rows[0].id, this.hashToken(raw)]);
-      return { accepted: true, token: this.config.get('NODE_ENV') === 'production' ? undefined : raw };
-    }
-    return { accepted: true };
-  }
-
-    async resetPassword(token: string, password: string) {
-    const result = await this.db.query<{ id: string; user_id: string }>(
-      `SELECT id,user_id
-       FROM auth_tokens
-       WHERE token_hash=$1
-         AND purpose='PASSWORD_RESET'
-         AND consumed_at IS NULL
-         AND expires_at>now()`,
-      [this.hashToken(token)],
+    const normalized = identifier.trim();
+    const found = await this.db.query<{ id: string; email: string | null }>(
+      `SELECT id,email FROM users
+       WHERE lower(email)=lower($1) OR phone=$1
+       LIMIT 1`,
+      [normalized],
     );
 
-    if (!result.rows[0]) {
-      throw new BadRequestException('Invalid or expired reset token');
+    // Use a generic response to avoid revealing whether an account exists.
+    const user = found.rows[0];
+    if (!user?.email) return { accepted: true };
+
+    const production = this.config.get('NODE_ENV') === 'production';
+    const apiKey = this.config.get<string>('RESEND_API_KEY');
+    const from = this.config.get<string>('AUTH_EMAIL_FROM');
+
+    if (production && (!apiKey || !from)) {
+      console.error('Password-reset email is not configured.');
+      return { accepted: true };
     }
 
+    const raw = randomBytes(32).toString('hex');
+
+    await this.db.query(
+      `UPDATE auth_tokens
+       SET consumed_at=now()
+       WHERE user_id=$1 AND purpose='PASSWORD_RESET'
+         AND consumed_at IS NULL`,
+      [user.id],
+    );
+
+    await this.db.query(
+      `INSERT INTO auth_tokens
+       (user_id,token_hash,purpose,expires_at)
+       VALUES ($1,$2,'PASSWORD_RESET',now()+interval '30 minutes')`,
+      [user.id, this.hashToken(raw)],
+    );
+
+    if (apiKey && from) {
+      const webUrl = (
+        this.config.get<string>('WEB_APP_URL') ?? 'http://localhost:3002'
+      ).replace(/\/+$/, '');
+      const resetUrl =
+        `${webUrl}/reset-password?token=${encodeURIComponent(raw)}`;
+
+      try {
+        const response = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from,
+            to: [user.email],
+            subject: 'Reset your CHIMZO password',
+            text:
+              `Use this link to reset your CHIMZO password: ${resetUrl}\n\n` +
+              'This link expires in 30 minutes. If you did not request this, ignore this email.',
+            html:
+              '<p>We received a request to reset your CHIMZO password.</p>' +
+              `<p><a href="${resetUrl}">Reset my password</a></p>` +
+              '<p>This link expires in 30 minutes. If you did not request this, ignore this email.</p>',
+          }),
+        });
+
+        if (!response.ok) {
+          await this.db.query(
+            `UPDATE auth_tokens SET consumed_at=now()
+             WHERE token_hash=$1 AND purpose='PASSWORD_RESET'
+               AND consumed_at IS NULL`,
+            [this.hashToken(raw)],
+          );
+          console.error('Password-reset email delivery failed.');
+        }
+      } catch {
+        await this.db.query(
+          `UPDATE auth_tokens SET consumed_at=now()
+           WHERE token_hash=$1 AND purpose='PASSWORD_RESET'
+             AND consumed_at IS NULL`,
+          [this.hashToken(raw)],
+        );
+        console.error('Password-reset email delivery failed.');
+      }
+    }
+
+    // Never expose reset tokens in production responses.
+    return production ? { accepted: true } : { accepted: true, token: raw };
+  }
+  async resetPassword(token: string, password: string) {
+    const tokenHash = this.hashToken(token);
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    // Lock and consume the token in the same transaction as the password change.
     await this.db.withTransaction(async (client) => {
+      const result = await client.query<{ id: string; user_id: string }>(
+        `SELECT id,user_id
+         FROM auth_tokens
+         WHERE token_hash=$1
+           AND purpose='PASSWORD_RESET'
+           AND consumed_at IS NULL
+           AND expires_at>now()
+         FOR UPDATE`,
+        [tokenHash],
+      );
+
+      const tokenRow = result.rows[0];
+      if (!tokenRow) {
+        throw new BadRequestException('Invalid or expired reset token');
+      }
+
+      const consumed = await client.query(
+        `UPDATE auth_tokens SET consumed_at=now()
+         WHERE id=$1 AND consumed_at IS NULL
+         RETURNING id`,
+        [tokenRow.id],
+      );
+
+      if (consumed.rowCount !== 1) {
+        throw new BadRequestException('Invalid or expired reset token');
+      }
+
       await client.query(
         `UPDATE users
          SET password_hash=$1,password_changed_at=now(),updated_at=now()
          WHERE id=$2`,
-        [await bcrypt.hash(password, 12), result.rows[0].user_id],
-      );
-
-      await client.query(
-        `UPDATE auth_tokens SET consumed_at=now() WHERE id=$1`,
-        [result.rows[0].id],
+        [passwordHash, tokenRow.user_id],
       );
 
       await client.query(
         `UPDATE auth_sessions
          SET revoked_at=now()
          WHERE user_id=$1 AND revoked_at IS NULL`,
-        [result.rows[0].user_id],
+        [tokenRow.user_id],
       );
     });
 
     return { reset: true };
   }
-
   private hashToken(value: string) {
     return createHash('sha256').update(value).digest('hex');
   }

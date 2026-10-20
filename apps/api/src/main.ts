@@ -7,9 +7,17 @@ import { ApiResponseInterceptor } from './common/interceptors/api-response.inter
 import { RequestLoggingMiddleware } from './common/middleware/request-logging.middleware';
 
 async function bootstrap() {
-  const app = await NestFactory.create(RootModule, { bufferLogs: true });
+  const app = await NestFactory.create(RootModule, { bufferLogs: true, rawBody: true });
   app.use(helmet());
-  app.enableCors({ origin: process.env.CORS_ORIGIN?.split(',') ?? true, credentials: true });
+  const configuredCorsOrigins = process.env.CORS_ORIGIN
+    ?.split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  app.enableCors({
+    origin: configuredCorsOrigins?.length ? configuredCorsOrigins : true,
+    credentials: true,
+  });
   app.setGlobalPrefix('api/v1');
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
   app.useGlobalFilters(new AllExceptionsFilter());

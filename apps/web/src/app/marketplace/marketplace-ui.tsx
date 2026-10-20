@@ -14,8 +14,8 @@ import {
 } from '@/lib/api';
 
 const pageClass =
-  'min-h-screen bg-[#08205B] text-[#E8EEF6] [font-family:var(--font-sora),Arial,sans-serif]';
-const panelClass = 'rounded-3xl border border-white/10 bg-white/[0.06] p-6';
+  'min-h-screen bg-[#F5F7FB] text-[#334155] [font-family:var(--font-sora),Arial,sans-serif]';
+const panelClass = 'rounded-3xl border border-[#E8EEF6] bg-white p-6 shadow-sm';
 const actionClass =
   'inline-flex min-h-11 items-center justify-center rounded-xl bg-[#00D4A3] px-5 py-2.5 text-sm font-bold text-[#08205B] transition hover:bg-[#63f0cf] disabled:cursor-not-allowed disabled:opacity-50';
 const mutedActionClass =
@@ -50,7 +50,7 @@ function errorMessage(error: unknown): string {
 function PageFrame({ children }: { children: React.ReactNode }) {
   return (
     <main className={pageClass}>
-      <header className="border-b border-white/10 bg-[#08205B]/90">
+      <header className="border-b border-[#E8EEF6] bg-white shadow-sm">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-5 sm:px-8">
           <Link href="/marketplace" className="flex items-center gap-3" aria-label="CHIMZO marketplace home">
             <span className="grid h-10 w-10 place-items-center rounded-2xl bg-[#00D4A3] text-lg font-black text-[#08205B]">C</span>
@@ -58,6 +58,7 @@ function PageFrame({ children }: { children: React.ReactNode }) {
           </Link>
           <nav className="flex items-center gap-3 sm:gap-6" aria-label="Marketplace">
             <Link href="/marketplace" className="text-sm font-semibold text-[#E8EEF6] hover:text-[#00D4A3]">Discover</Link>
+            <Link href="/marketplace/orders" className="text-sm font-semibold text-[#08205B] hover:text-[#00D4A3]">My Orders</Link>
             <Link href="/marketplace/cart" className="rounded-full border border-white/20 px-4 py-2 text-sm font-semibold text-white hover:border-[#00D4A3] hover:text-[#00D4A3]">Cart</Link>
           </nav>
         </div>

@@ -74,7 +74,10 @@ const migrations = [
   '0041_provider_primary_route_uniqueness.sql',
   '0042_marketplace_payment_recovery_claims.sql',
   '0043_marketplace_fulfillment_order_seller_uniqueness.sql',
-  '0044_marketplace_fulfillment_booking_recovery_claims.sql'
+  '0044_marketplace_fulfillment_booking_recovery_claims.sql',
+  '0045_finance_currency_exchange_rates.sql',
+  '0046_finance_general_ledger.sql',
+  '0047_marketplace_default_categories.sql'
 ];
 
 const migrationsDirectory = resolve(repoRoot, 'database/migrations');
@@ -108,13 +111,35 @@ try {
     console.log(`Applying ${migration}`);
     await client.query('BEGIN');
     try {
-      await client.query(sql);
+      if (migration === '0045_finance_currency_exchange_rates.sql') {
+        const statements = sql
+          .split(/;\s*(?:\r?\n|$)/)
+          .map((statement) => statement.trim())
+          .filter(Boolean);
+
+        if (statements.length !== 5) {
+          throw new Error(
+            'Expected 5 SQL statements in ' + migration +
+            ', found ' + statements.length + '.',
+          );
+        }
+
+        for (const statement of statements) {
+          await client.query(statement);
+        }
+      } else {
+        await client.query(sql);
+      }
       await client.query('INSERT INTO schema_migrations(version) VALUES ($1)', [migration]);
       await client.query('COMMIT');
     } catch (error) {
-      await client.query('ROLLBACK');
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        console.error('Migration rollback failed; preserving original migration error:', rollbackError);
+      }
       throw error;
-   }
+    }
   }
 
   console.log('Database migrations complete.');

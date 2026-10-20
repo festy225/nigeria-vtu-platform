@@ -1,6 +1,6 @@
-'use client';
+﻿'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 type Feature = {
   key: string;
@@ -31,9 +31,9 @@ const FEATURE_LABELS: Record<string, string> = {
   BULK_PURCHASE_ENABLED: 'Bulk Purchase',
 
   MARKETPLACE_ENABLED: 'Marketplace',
-  NIGERIA_TO_NIGERIA_MARKETPLACE_ENABLED: 'Nigeria → Nigeria',
+  NIGERIA_TO_NIGERIA_MARKETPLACE_ENABLED: 'Nigeria to Nigeria',
   NIGERIA_TO_INTERNATIONAL_MARKETPLACE_ENABLED:
-    'Nigeria → International',
+    'Nigeria to International',
   GLOBAL_MARKETPLACE_ENABLED: 'Global Marketplace',
 
   SELLER_STORES_ENABLED: 'Seller Stores',
@@ -63,7 +63,7 @@ const SECTIONS = [
   },
   {
     title: 'Advanced Services',
-    description: 'Additional Naivex services and customer features.',
+    description: 'Additional CHIMZO services and customer features.',
     keys: [
       'DATA_TO_CASH_ENABLED',
       'DATA_AIRTIME_GIFT_ENABLED',
@@ -75,7 +75,7 @@ const SECTIONS = [
   },
   {
     title: 'Marketplace',
-    description: 'Control the Naivex marketplace and its operating regions.',
+    description: 'Control the CHIMZO marketplace and its operating regions.',
     keys: [
       'MARKETPLACE_ENABLED',
       'NIGERIA_TO_NIGERIA_MARKETPLACE_ENABLED',
@@ -87,7 +87,7 @@ const SECTIONS = [
   },
   {
     title: 'Platform Channels',
-    description: 'Additional ways customers and partners can access Naivex.',
+    description: 'Additional ways customers and partners can access CHIMZO.',
     keys: [
       'AGENT_API_ENABLED',
       'VENDOR_API_ENABLED',
@@ -107,7 +107,7 @@ export default function FeatureManagementPage() {
   const apiUrl =
     process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
 
-  async function loadFeatures() {
+  const loadFeatures = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
@@ -140,7 +140,7 @@ export default function FeatureManagementPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [apiUrl]);
 
   async function toggleFeature(feature: Feature) {
     try {
@@ -189,14 +189,14 @@ export default function FeatureManagementPage() {
 
   useEffect(() => {
     loadFeatures();
-  }, []);
+  }, [loadFeatures]);
 
   return (
     <main className="space-y-6 p-6">
       <div>
         <h1 className="text-2xl font-bold">Feature Management</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Control which Naivex services and platform features are enabled.
+          Control which CHIMZO services and platform features are enabled.
         </p>
       </div>
 

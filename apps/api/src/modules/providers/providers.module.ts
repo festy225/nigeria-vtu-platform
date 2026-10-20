@@ -7,6 +7,7 @@ import { ProviderRegistryService } from './registry/provider-registry.service';
 import { MockAirtimeProviderAdapter } from './adapters/mock-airtime-provider.adapter';
 import { AirtimeProviderAdapterResolver } from './adapters/airtime-provider-adapter.resolver';
 import { MockPaymentProviderAdapter } from './adapters/mock-payment-provider.adapter';
+import { PaystackPaymentProviderAdapter } from './adapters/paystack-payment-provider.adapter';
 import { PaymentProviderAdapterResolver } from './adapters/payment-provider-adapter.resolver';
 import { MockLogisticsProviderAdapter } from './adapters/mock-logistics-provider.adapter';
 import { LogisticsProviderAdapterResolver } from './adapters/logistics-provider-adapter.resolver';
@@ -34,6 +35,7 @@ export const AIRTIME_PROVIDER_REGISTRATIONS = Symbol(
     ProviderSecretResolver,
     ProviderRegistryService,
     MockPaymentProviderAdapter,
+    PaystackPaymentProviderAdapter,
     {
       provide: KYC_PROVIDER_ADAPTERS,
       useValue: [],
@@ -91,9 +93,11 @@ export const AIRTIME_PROVIDER_REGISTRATIONS = Symbol(
   exports: [
     ProviderSecretResolver,
     ProviderRegistryService,
+    KycProviderAdapterResolver,
     PaymentProviderRouterService,
     AirtimeProviderRouterService,
     MockPaymentProviderAdapter,
+    PaystackPaymentProviderAdapter,
     MockAirtimeProviderAdapter,
     MockLogisticsProviderAdapter,
     LogisticsProviderAdapterResolver,

@@ -181,9 +181,25 @@ describe('LogisticsProviderRouterService', () => {
     );
   });
 
-  it('resolves the adapter by stored configuration identity', async () => {
+  it('rejects disabled or ineligible pinned provider configurations', async () => {
+    registry.findRegistrations
+      .mockResolvedValueOnce([registration({ enabled: false })])
+      .mockResolvedValueOnce([registration({ status: 'DISABLED' })])
+      .mockResolvedValueOnce([registration({ logistics: false })])
+      .mockResolvedValueOnce([registration({ serviceId: 'some-service-id' })]);
+
+    for (let index = 0; index < 4; index++) {
+      await expect(
+        router.getProviderRegistrationByConfigurationId(
+          'provider-configuration-id',
+        ),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    }
+  });
+
+  it('resolves an enabled pinned provider even when it is no longer primary', async () => {
     registry.findRegistrations.mockResolvedValue([
-      registration({ enabled: false }),
+      registration({ isPrimary: false }),
     ]);
 
     const selected = await router.getProviderRegistrationByConfigurationId(

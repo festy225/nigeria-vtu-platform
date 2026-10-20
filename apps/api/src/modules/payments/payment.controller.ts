@@ -1,12 +1,16 @@
 import {
   Body,
   Controller,
+  Get,
   Headers,
   Param,
   ParseUUIDPipe,
   Post,
+  RawBodyRequest,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { Public } from '../../common/auth/auth.decorators';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { FeatureGuard } from '../../common/features/feature.guard';
@@ -43,6 +47,16 @@ export class PaymentController {
 
   @UseGuards(FeatureGuard)
   @RequiresFeature('MARKETPLACE_ENABLED')
+  @Get('marketplace-orders/:orderId/status')
+  getMarketplaceOrderPaymentStatus(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId', new ParseUUIDPipe()) orderId: string,
+  ) {
+    return this.payments.getMarketplaceOrderPaymentStatus(user.id, orderId);
+  }
+
+  @UseGuards(FeatureGuard)
+  @RequiresFeature('MARKETPLACE_ENABLED')
   @Post('marketplace-orders/:orderId')
   createMarketplacePayment(
     @CurrentUser() user: AuthenticatedUser,
@@ -60,7 +74,8 @@ export class PaymentController {
   callback(
     @Body() payload: unknown,
     @Headers() headers: Record<string, string | string[] | undefined>,
+    @Req() request: RawBodyRequest<Request>,
   ) {
-    return this.payments.completeFromWebhook(payload, headers);
+    return this.payments.completeFromWebhook(payload, headers, request.rawBody);
   }
 }

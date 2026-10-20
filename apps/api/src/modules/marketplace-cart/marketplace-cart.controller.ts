@@ -24,6 +24,11 @@ import { MarketplaceCartService } from './marketplace-cart.service';
 export class MarketplaceCartController {
   constructor(private readonly carts: MarketplaceCartService) {}
 
+  @Get('orders')
+  getCustomerOrders(@CurrentUser() user: AuthenticatedUser) {
+    return this.carts.getCustomerOrders(user.id);
+  }
+
   @Get()
   getCart(@CurrentUser() user: AuthenticatedUser) {
     return this.carts.getCart(user.id);

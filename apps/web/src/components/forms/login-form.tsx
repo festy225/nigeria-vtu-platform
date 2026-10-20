@@ -29,7 +29,13 @@ export function LoginForm() {
       });
 
       setSession(result);
-      router.replace('/dashboard');
+      router.replace(
+        result.user.roles?.some(
+          (role) => role === 'SUPER_ADMIN' || role === 'ADMIN',
+        )
+          ? '/dashboard/admin'
+          : '/dashboard',
+      );
     } catch (caught) {
       if (caught instanceof ApiError) {
         setError(
@@ -85,10 +91,18 @@ export function LoginForm() {
         />
       </div>
 
+      <div className="-mt-2 flex justify-end">
+        <Link
+          href="/forgot-password"
+          className="text-sm text-brand-600 hover:text-brand-700"
+        >
+          Forgot password?
+        </Link>
+      </div>
       {error && (
         <p
           role="alert"
-          className="text-sm text-rose-300"
+          className="text-sm text-rose-700"
         >
           {error}
         </p>
@@ -105,7 +119,7 @@ export function LoginForm() {
       <p className="text-center text-sm text-slate-500">
         New here?{' '}
         <Link
-          className="text-brand-300 hover:text-brand-200"
+          className="text-brand-600 hover:text-brand-700"
           href="/register"
         >
           Create an account

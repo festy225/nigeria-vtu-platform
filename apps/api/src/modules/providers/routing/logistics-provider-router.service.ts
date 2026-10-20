@@ -87,6 +87,20 @@ export class LogisticsProviderRouterService {
       );
     }
 
+    // Keep pinned shipment identity across route changes, but reject configurations
+    // that are disabled, inactive, or ineligible for logistics operations.
+    // Do not require primary status: existing shipments may outlive route changes.
+    if (
+      registration.provider.status !== 'ACTIVE' ||
+      registration.provider.capabilities.logistics !== true ||
+      !registration.configuration.enabled ||
+      registration.configuration.serviceId !== null
+    ) {
+      throw new ServiceUnavailableException(
+        'The configured logistics provider is not eligible for fulfillment operations',
+      );
+    }
+
     try {
       return this.toRegistration(registration);
     } catch (error) {

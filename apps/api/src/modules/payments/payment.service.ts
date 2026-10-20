@@ -34,6 +34,7 @@ interface FundingIntentRow {
   payment_provider_reference: string | null;
   payment_provider_status: string | null;
   payment_provider_checkout_url: string | null;
+  payment_provider_configuration_id: string | null;
   deposit_id: string;
   deposit_reference: string;
   deposit_wallet_id: string;
@@ -67,6 +68,7 @@ interface MembershipPaymentRow {
   payment_provider_reference: string | null;
   payment_provider_status: string | null;
   payment_provider_checkout_url: string | null;
+  payment_provider_configuration_id: string | null;
   payment_created_at: Date;
 }
 
@@ -485,6 +487,76 @@ if (response.status !== 'PENDING') {
     }
   }
 
+  async getMarketplaceOrderPaymentStatus(userId: string, orderId: string) {
+    const result = await this.db.query<{
+      id: string;
+      order_number: string;
+      order_status: string;
+      currency: string;
+      total_minor: string;
+      created_at: Date | string;
+      payment_id: string | null;
+      payment_reference: string | null;
+      payment_state: string | null;
+      payment_provider_status: string | null;
+      payment_provider_name: string | null;
+      payment_provider_reference: string | null;
+    }>(
+      `SELECT
+         o.id,
+         o.order_number::text AS order_number,
+         o.status AS order_status,
+         o.currency,
+         o.total_minor::text AS total_minor,
+         o.created_at,
+         p.id AS payment_id,
+         p.reference AS payment_reference,
+         p.state AS payment_state,
+         p.provider_status AS payment_provider_status,
+         p.provider_name AS payment_provider_name,
+         p.provider_reference AS payment_provider_reference
+       FROM marketplace_orders o
+       LEFT JOIN LATERAL (
+         SELECT p.*
+         FROM payments p
+         WHERE p.marketplace_order_id = o.id
+           AND p.user_id = o.customer_id
+           AND p.purpose = 'MARKETPLACE_ORDER'
+         ORDER BY p.created_at DESC, p.id DESC
+         LIMIT 1
+       ) p ON true
+       WHERE o.id = $1 AND o.customer_id = $2
+       LIMIT 1`,
+      [orderId, userId],
+    );
+
+    const order = result.rows[0];
+    if (!order) {
+      throw new NotFoundException('Marketplace order not found');
+    }
+
+    return {
+      order: {
+        id: order.id,
+        orderNumber: order.order_number,
+        status: order.order_status,
+        currency: order.currency,
+        totalMinor: Number(order.total_minor),
+        createdAt: new Date(order.created_at).toISOString(),
+      },
+      payment: order.payment_id
+        ? {
+            id: order.payment_id,
+            reference: order.payment_reference,
+            state: order.payment_state,
+            providerStatus: order.payment_provider_status,
+            providerName: order.payment_provider_name,
+            providerReference: order.payment_provider_reference,
+          }
+        : null,
+    };
+  }
+
   async createMarketplacePaymentIntent(
     userId: string,
     customerEmail: string | null,
@@ -690,6 +762,7 @@ if (response.status !== 'PENDING') {
   async completeFromWebhook(
     rawPayload: unknown,
     headers: Record<string, string | string[] | undefined> = {},
+    rawBody?: Buffer,
   ) {
     const paymentReference = this.readWebhookPaymentReference(rawPayload);
 
@@ -740,6 +813,7 @@ if (response.status !== 'PENDING') {
       const verification = await provider.verifyWebhook({
         rawPayload,
         headers,
+        ...(rawBody ? { rawBody } : {}),
         ...(providerRegistration
           ? {
               providerConfiguration: {
@@ -791,6 +865,46 @@ if (response.status !== 'PENDING') {
         payment.payment_provider_name !== event.providerName
       ) {
         throw new ConflictException('Payment provider does not match');
+      }
+
+      // A valid webhook signature authenticates the sender, but settlement
+      // still requires an independent Paystack transaction verification.
+      if (provider.name === 'PAYSTACK' && event.status === 'SUCCESS') {
+        if (!providerRegistration) {
+          throw new ConflictException(
+            'Paystack payment has no pinned provider configuration',
+          );
+        }
+
+        const lookup = await provider.lookupPayment({
+          paymentReference: payment.payment_reference,
+          amountMinor: Number(payment.payment_amount_minor),
+          currency: payment.payment_currency,
+          providerConfiguration: {
+            id: providerRegistration.configuration.id,
+            config: providerRegistration.configuration.config,
+            credentials: this.providerSecretResolver.resolve(
+              providerRegistration.configuration.secretRef,
+            ),
+          },
+        });
+
+        const transaction = lookup.transaction;
+        if (
+          lookup.status !== 'FOUND' ||
+          !transaction ||
+          transaction.providerName !== provider.name ||
+          transaction.paymentReference !== payment.payment_reference ||
+          transaction.providerReference !== event.providerReference ||
+          transaction.amountMinor !== Number(payment.payment_amount_minor) ||
+          transaction.currency !== payment.payment_currency ||
+          transaction.status !== 'SUCCESS' ||
+          !transaction.providerReference
+        ) {
+          throw new ConflictException(
+            'Paystack could not independently confirm the successful payment',
+          );
+        }
       }
 
       if (payment.payment_state === 'SUCCESSFUL') {
@@ -1082,18 +1196,42 @@ if (response.status !== 'PENDING') {
   }
 
   private readWebhookPaymentReference(rawPayload: unknown): string {
-    if (
-      typeof rawPayload !== 'object' ||
-      rawPayload === null ||
-      !('paymentReference' in rawPayload) ||
-      typeof rawPayload.paymentReference !== 'string' ||
-      !rawPayload.paymentReference.trim()
-    ) {
+    if (typeof rawPayload !== 'object' || rawPayload === null) {
       throw new BadRequestException(
         'Payment webhook is missing the payment reference',
       );
     }
-    return rawPayload.paymentReference;
+
+    const payload = rawPayload as Record<string, unknown>;
+    const data =
+      typeof payload.data === 'object' && payload.data !== null
+        ? (payload.data as Record<string, unknown>)
+        : undefined;
+    const metadata =
+      data &&
+      typeof data.metadata === 'object' &&
+      data.metadata !== null
+        ? (data.metadata as Record<string, unknown>)
+        : undefined;
+
+    const candidates = [
+      payload.paymentReference,
+      data?.reference,
+      metadata?.paymentReference,
+    ];
+
+    const reference = candidates.find(
+      (value): value is string =>
+        typeof value === 'string' && value.trim().length > 0,
+    );
+
+    if (!reference) {
+      throw new BadRequestException(
+        'Payment webhook is missing the payment reference',
+      );
+    }
+
+    return reference;
   }
 
   /**
@@ -1557,6 +1695,7 @@ if (response.status !== 'PENDING') {
          provider_reference payment_provider_reference,
          provider_status payment_provider_status,
          provider_checkout_url payment_provider_checkout_url,
+ provider_configuration_id payment_provider_configuration_id,
          created_at payment_created_at
        FROM payments
        WHERE user_id = $1 AND idempotency_key = $2
@@ -1632,6 +1771,7 @@ if (response.status !== 'PENDING') {
               p.idempotency_key payment_idempotency_key,p.created_at payment_created_at,
               p.provider_name payment_provider_name,p.provider_reference payment_provider_reference,
               p.provider_status payment_provider_status,p.provider_checkout_url payment_provider_checkout_url,
+       p.provider_configuration_id payment_provider_configuration_id,
               d.id deposit_id,d.reference deposit_reference,d.wallet_id deposit_wallet_id,
               d.amount_minor deposit_amount_minor,d.currency deposit_currency,d.state deposit_state,
               d.created_at deposit_created_at
@@ -1650,6 +1790,7 @@ if (response.status !== 'PENDING') {
               p.idempotency_key payment_idempotency_key,p.created_at payment_created_at,
               p.provider_name payment_provider_name,p.provider_reference payment_provider_reference,
               p.provider_status payment_provider_status,p.provider_checkout_url payment_provider_checkout_url,
+       p.provider_configuration_id payment_provider_configuration_id,
               d.id deposit_id,d.reference deposit_reference,d.wallet_id deposit_wallet_id,
               d.amount_minor deposit_amount_minor,d.currency deposit_currency,d.state deposit_state,
               d.created_at deposit_created_at

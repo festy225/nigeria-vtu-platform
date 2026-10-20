@@ -302,7 +302,7 @@ export default function DashboardPage() {
           </h2>
 
           <p className="mt-1 text-sm text-slate-500">
-            Access your most-used Naivex services.
+            Access your most-used CHIMZO services.
           </p>
         </div>
 
@@ -341,7 +341,7 @@ export default function DashboardPage() {
             </h3>
 
             <p className="mt-1 text-xs leading-5 text-slate-500">
-              Add funds to your Naivex wallet.
+              Add funds to your CHIMZO wallet.
             </p>
 
             <span className="mt-4 block text-xs font-semibold text-[#155EEF]">
@@ -383,7 +383,7 @@ export default function DashboardPage() {
             </h3>
 
             <p className="mt-1 text-xs leading-5 text-slate-500">
-              Shop products from Naivex marketplace sellers.
+              Shop products from CHIMZO marketplace sellers.
             </p>
 
             <span className="mt-4 block text-xs font-semibold text-[#155EEF]">

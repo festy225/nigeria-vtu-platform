@@ -24,6 +24,7 @@ import {
   CreateSellerApplicationDto,
   ReviewSellerApplicationDto,
 } from './seller.dtos';
+import { ReviewMarketplaceProductDto } from './dto/review-marketplace-product.dto';
 import { SellerService } from './seller.service';
 
 @Controller('sellers')
@@ -38,6 +39,16 @@ export class SellerController {
     return this.sellers.listApplications();
   }
 
+  @Patch('products/:id/moderation')
+  @Roles('SUPER_ADMIN')
+  @RequiresFeature('MARKETPLACE_ENABLED')
+  moderateProduct(
+    @Param('id', new ParseUUIDPipe()) productId: string,
+    @CurrentUser() moderator: AuthenticatedUser,
+    @Body() dto: ReviewMarketplaceProductDto,
+  ) {
+    return this.sellers.moderateProduct(productId, moderator.id, dto);
+  }
   @Patch('applications/:id/review')
   @Roles('SUPER_ADMIN')
   @RequiresFeature('SELLER_STORES_ENABLED')

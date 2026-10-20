@@ -334,6 +334,73 @@ export class MarketplaceCartService {
     }
   }
 
+  async getCustomerOrders(userId: string) {
+    const result = await this.database.query<{
+      id: string;
+      order_number: string;
+      status: string;
+      currency: string;
+      subtotal_minor: string;
+      total_minor: string;
+      created_at: Date | string;
+      payment_id: string | null;
+      payment_reference: string | null;
+      payment_state: string | null;
+      payment_provider_status: string | null;
+      payment_provider_name: string | null;
+      payment_provider_reference: string | null;
+    }>(
+      `SELECT
+         o.id,
+         o.order_number::text AS order_number,
+         o.status,
+         o.currency,
+         o.subtotal_minor::text AS subtotal_minor,
+         o.total_minor::text AS total_minor,
+         o.created_at,
+         p.id AS payment_id,
+         p.reference AS payment_reference,
+         p.state AS payment_state,
+         p.provider_status AS payment_provider_status,
+         p.provider_name AS payment_provider_name,
+         p.provider_reference AS payment_provider_reference
+       FROM marketplace_orders o
+       LEFT JOIN LATERAL (
+         SELECT p.*
+         FROM payments p
+         WHERE p.marketplace_order_id = o.id
+           AND p.user_id = o.customer_id
+           AND p.purpose = 'MARKETPLACE_ORDER'
+         ORDER BY p.created_at DESC, p.id DESC
+         LIMIT 1
+       ) p ON true
+       WHERE o.customer_id = $1
+       ORDER BY o.created_at DESC, o.id DESC
+       LIMIT 100`,
+      [userId],
+    );
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      orderNumber: row.order_number,
+      status: row.status,
+      currency: row.currency,
+      subtotalMinor: Number(row.subtotal_minor),
+      totalMinor: Number(row.total_minor),
+      createdAt: new Date(row.created_at).toISOString(),
+      payment: row.payment_id
+        ? {
+            id: row.payment_id,
+            reference: row.payment_reference,
+            state: row.payment_state,
+            providerStatus: row.payment_provider_status,
+            providerName: row.payment_provider_name,
+            providerReference: row.payment_provider_reference,
+          }
+        : null,
+    }));
+  }
+
   async checkout(userId: string, customerAddressId: string) {
     return this.database.withTransaction(async (client) => {
       const cartResult = await client.query<{

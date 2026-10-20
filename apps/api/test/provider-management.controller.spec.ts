@@ -9,6 +9,7 @@ describe('ProviderManagementController configuration responses', () => {
   const registry = {
     createProviderConfiguration: jest.fn(),
     findConfigurations: jest.fn(),
+    updateProviderConfiguration: jest.fn(),
   };
 
   let controller: ProviderManagementController;
@@ -185,4 +186,85 @@ describe('ProviderManagementController configuration responses', () => {
     );
   });
 
+  it('restricts configuration updates to SUPER_ADMIN', () => {
+    const roles = new Reflector().get(
+      ROLES_KEY,
+      ProviderManagementController.prototype.updateConfiguration,
+    );
+
+    expect(roles).toEqual(['SUPER_ADMIN']);
+  });
+
+  it('redacts credentials in the update response and omits secretRef', async () => {
+    const configurationId = '660e8400-e29b-41d4-a716-446655440000';
+    const actorId = 'super-admin-id';
+    const dto = {
+      priority: 2,
+      isPrimary: true,
+      isBackup: false,
+      enabled: true,
+      config: {
+        region: 'NG',
+        apiToken: 'must-not-be-returned',
+        timeoutMs: 3000,
+      },
+    };
+
+    registry.updateProviderConfiguration.mockResolvedValue({
+      id: configurationId,
+      providerId: 'provider-id',
+      serviceId: null,
+      priority: 2,
+      isPrimary: true,
+      isBackup: false,
+      enabled: true,
+      secretRef: 'env:PAYMENT_PROVIDER_SECRET',
+      config: {
+        region: 'NG',
+        apiToken: 'must-not-be-returned',
+        timeoutMs: 3000,
+      },
+      updatedAt: new Date('2026-10-15T00:00:00.000Z'),
+    });
+
+    const result = await controller.updateConfiguration(
+      configurationId,
+      dto as never,
+      {
+        user: {
+          id: actorId,
+          email: null,
+          phone: null,
+          roles: ['SUPER_ADMIN'],
+        },
+      } as never,
+    );
+
+    expect(registry.updateProviderConfiguration).toHaveBeenCalledWith(
+      configurationId,
+      dto,
+      actorId,
+    );
+
+    expect(result.data.config).toEqual({
+      region: 'NG',
+      apiToken: '[REDACTED]',
+      timeoutMs: 3000,
+    });
+    expect(result.data).not.toHaveProperty('secretRef');
+    expect(JSON.stringify(result)).not.toContain('must-not-be-returned');
+    expect(JSON.stringify(result)).not.toContain('PAYMENT_PROVIDER_SECRET');
+  });
+
+  it('rejects an update when the authenticated user is missing', async () => {
+    await expect(
+      controller.updateConfiguration(
+        '660e8400-e29b-41d4-a716-446655440000',
+        { priority: 2 } as never,
+        {} as never,
+      ),
+    ).rejects.toThrow('Authentication required');
+
+    expect(registry.updateProviderConfiguration).not.toHaveBeenCalled();
+  });
 });

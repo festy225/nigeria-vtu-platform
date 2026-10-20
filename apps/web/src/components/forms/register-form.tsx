@@ -173,14 +173,14 @@ export function RegisterForm() {
       {error && (
         <div
           role="alert"
-          className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300"
+          className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"
         >
           <p>{error}</p>
 
           {accountExists && (
             <Link
               href="/login"
-              className="mt-3 inline-block font-medium text-brand-300 hover:text-brand-200"
+              className="mt-3 inline-block font-medium text-brand-600 hover:text-brand-700"
             >
               Go to Login
             </Link>
@@ -193,13 +193,13 @@ export function RegisterForm() {
         className="w-full"
         disabled={submitting}
       >
-        {submitting ? 'Creating account…' : 'Create account'}
+        {submitting ? 'Creating account...' : 'Create account'}
       </Button>
 
       <p className="text-center text-sm text-slate-500">
         Already have an account?{' '}
         <Link
-          className="text-brand-300 hover:text-brand-200"
+          className="text-brand-600 hover:text-brand-700"
           href="/login"
         >
           Sign in

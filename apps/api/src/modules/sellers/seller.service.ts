@@ -16,6 +16,7 @@ import type {
 import type { CreateMarketplaceProductDto } from './dto/create-marketplace-product.dto';
 import type { UpdateMarketplaceProductDto } from './dto/update-marketplace-product.dto';
 import type { CreateSellerLocationDto } from './dto/create-seller-location.dto';
+import type { ReviewMarketplaceProductDto } from './dto/review-marketplace-product.dto';
 
 interface SellerReviewRow {
   id: string;
@@ -382,6 +383,134 @@ export class SellerService {
     });
   }
 
+  async moderateProduct(
+    productId: string,
+    moderatorId: string,
+    dto: ReviewMarketplaceProductDto,
+  ): Promise<{ id: string; status: string; enabled: boolean }> {
+    return this.database.withTransaction(async (client) => {
+      const result = await client.query<{
+        id: string;
+        status: string;
+        enabled: boolean;
+        onboarding_status: string;
+        kyc_status: string;
+        risk_status: string;
+        category_enabled: boolean;
+        has_base_price: boolean;
+        has_valid_variant_price: boolean;
+      }>(
+        `SELECT product.id,
+                product.status,
+                product.enabled,
+                seller.onboarding_status,
+                seller.kyc_status,
+                seller.risk_status,
+                category.enabled AS category_enabled,
+                (product.price_minor IS NOT NULL AND product.currency IS NOT NULL)
+                  AS has_base_price,
+                EXISTS (
+                  SELECT 1
+                  FROM marketplace_product_variants variant
+                  WHERE variant.product_id = product.id
+                    AND variant.enabled = true
+                    AND variant.price_minor IS NOT NULL
+                    AND variant.currency IS NOT NULL
+                ) AS has_valid_variant_price
+         FROM marketplace_products product
+         JOIN marketplace_sellers seller ON seller.id = product.seller_id
+         JOIN marketplace_product_categories category ON category.id = product.category_id
+         WHERE product.id = $1
+         FOR UPDATE OF product, seller`,
+        [productId],
+      );
+
+      const product = result.rows[0];
+      if (!product) {
+        throw new NotFoundException('Marketplace product not found');
+      }
+
+      const allowedTransitions: Record<string, string[]> = {
+        START_REVIEW: ['SUBMITTED'],
+        APPROVE: ['SUBMITTED', 'UNDER_REVIEW'],
+        PUBLISH: ['APPROVED'],
+        REJECT: ['SUBMITTED', 'UNDER_REVIEW', 'APPROVED'],
+        SUSPEND: ['LIVE', 'APPROVED'],
+      };
+
+      if (!allowedTransitions[dto.decision]?.includes(product.status)) {
+        throw new ConflictException(
+          `Cannot apply ${dto.decision} to a product with status ${product.status}`,
+        );
+      }
+
+      if (
+        dto.decision === 'PUBLISH' &&
+        (
+          product.onboarding_status !== 'APPROVED' ||
+          product.kyc_status !== 'VERIFIED' ||
+          !['NORMAL', 'WATCH'].includes(product.risk_status) ||
+          !product.category_enabled ||
+          (!product.has_base_price && !product.has_valid_variant_price)
+        )
+      ) {
+        throw new ConflictException(
+          'Product cannot be published until seller approval, KYC, category, risk, and pricing requirements are satisfied',
+        );
+      }
+
+      const statusByDecision: Record<string, string> = {
+        START_REVIEW: 'UNDER_REVIEW',
+        APPROVE: 'APPROVED',
+        PUBLISH: 'LIVE',
+        REJECT: 'REJECTED',
+        SUSPEND: 'SUSPENDED',
+      };
+      const nextStatus = statusByDecision[dto.decision];
+      const enabled = dto.decision === 'PUBLISH';
+
+      const updatedResult = await client.query<{
+        id: string;
+        status: string;
+        enabled: boolean;
+      }>(
+        `UPDATE marketplace_products
+         SET status = $1::marketplace_product_status,
+             enabled = $2,
+             updated_at = now()
+         WHERE id = $3 AND status = $4
+         RETURNING id, status, enabled`,
+        [nextStatus, enabled, productId, product.status],
+      );
+
+      const updated = updatedResult.rows[0];
+      if (!updated) {
+        throw new ConflictException('Product status changed; reload and retry');
+      }
+
+      await this.audit.record(
+        {
+          actorId: moderatorId,
+          action: 'MARKETPLACE_PRODUCT_MODERATED',
+          resourceType: 'MARKETPLACE_PRODUCT',
+          resourceId: updated.id,
+          beforeData: {
+            status: product.status,
+            enabled: product.enabled,
+          },
+          afterData: {
+            status: updated.status,
+            enabled: updated.enabled,
+            decision: dto.decision,
+          },
+          reason: dto.reviewNote?.trim() || undefined,
+        },
+        client,
+      );
+
+      return updated;
+    });
+  }
   async reviewApplication(
     applicationId: string,
     reviewerId: string,

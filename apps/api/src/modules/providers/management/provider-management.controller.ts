@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Req,
   UnauthorizedException,
@@ -14,6 +15,7 @@ import type { Request } from 'express';
 import { ProviderRegistryService } from '../registry/provider-registry.service';
 import { CreateProviderDto } from '../dto/create-provider.dto';
 import { CreateProviderConfigurationDto } from '../dto/create-provider-configuration.dto';
+import { UpdateProviderConfigurationDto } from '../dto/update-provider-configuration.dto';
 import { RolesGuard } from '../../../common/auth/roles.guard';
 import { Roles } from '../../../common/auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
@@ -177,6 +179,32 @@ export class ProviderManagementController {
     };
   }
 
+  @Patch('configurations/:id')
+  @Roles('SUPER_ADMIN')
+  async updateConfiguration(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdateProviderConfigurationDto,
+    @Req() request: Request & { user?: AuthenticatedUser },
+  ) {
+    const user = request.user;
+    if (!user) throw new UnauthorizedException('Authentication required');
+
+    const configuration = await this.providerRegistry.updateProviderConfiguration(id, dto, user.id);
+    return {
+      success: true,
+      data: {
+        id: configuration.id,
+        providerId: configuration.providerId,
+        serviceId: configuration.serviceId,
+        priority: configuration.priority,
+        isPrimary: configuration.isPrimary,
+        isBackup: configuration.isBackup,
+        enabled: configuration.enabled,
+        config: redactProviderConfiguration(configuration.config),
+        updatedAt: configuration.updatedAt,
+      },
+    };
+  }
   @Get(':id/health')
   async findHealth(
     @Param('id', new ParseUUIDPipe()) providerId: string,

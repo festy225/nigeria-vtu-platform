@@ -232,6 +232,36 @@ export interface MarketplaceCheckoutOrder {
   };
 }
 
+export interface MarketplaceCustomerOrder {
+  id: string;
+  orderNumber: string;
+  status: string;
+  currency: CurrencyCode;
+  subtotalMinor: number;
+  totalMinor: number;
+  createdAt: string;
+  payment: {
+    id: string;
+    reference: string | null;
+    state: string | null;
+    providerStatus: string | null;
+    providerName: string | null;
+    providerReference: string | null;
+  } | null;
+}
+
+export interface MarketplaceOrderPaymentStatus {
+  order: {
+    id: string;
+    orderNumber: string;
+    status: string;
+    currency: CurrencyCode;
+    totalMinor: number;
+    createdAt: string;
+  };
+  payment: MarketplaceCustomerOrder['payment'];
+}
+
 export interface MarketplacePaymentIntent {
   payment: {
     id: string;
@@ -263,6 +293,55 @@ export interface MarketplaceCartItem {
   unitPriceMinor: number;
   lineTotalMinor: number;
   currency: CurrencyCode;
+}
+export interface AdminUserRecord {
+  id: string;
+  email: string;
+  phone: string | null;
+  status: string;
+  roles: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminUserList {
+  items: AdminUserRecord[];
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+export interface AdminProviderRecord {
+  id: string;
+  name: string;
+  status: string;
+  baseUrl: string | null;
+  capabilities: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminProviderConfiguration {
+  id: string;
+  providerId: string;
+  serviceId: string | null;
+  priority: number;
+  isPrimary: boolean;
+  isBackup: boolean;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  updatedAt: string;
+}
+
+export interface AdminProviderHealth {
+  id: string;
+  providerId: string;
+  serviceId?: string | null;
+  status: string;
+  successRate?: number | string | null;
+  timeoutRate?: number | string | null;
+  averageLatencyMs?: number | null;
+  checkedAt?: string | null;
 }
 type ApiEnvelope<T> = {
   success: boolean;
@@ -412,6 +491,68 @@ passwordResetConfirm: (token: string, password: string) =>
       }`,
     ),
 
+  getAdminUsers: (params: { page: number; limit: number; search?: string }) => {
+    const query = new URLSearchParams({
+      page: String(params.page),
+      limit: String(params.limit),
+    });
+    if (params.search?.trim()) query.set("search", params.search.trim());
+    return authenticatedFetch<AdminUserList>("/users?" + query.toString());
+  },
+  getAdminProviders: () =>
+    authenticatedFetch<AdminProviderRecord[]>("/admin/providers"),
+
+  createAdminProvider: (payload: {
+    name: string;
+    adapterKey: string;
+    baseUrl?: string;
+    capabilities?: Record<string, unknown>;
+  }) => authenticatedFetch<AdminProviderRecord>("/admin/providers", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  }),
+
+  getAdminProviderConfigurations: (providerId: string) =>
+    authenticatedFetch<AdminProviderConfiguration[]>(
+      "/admin/providers/" + encodeURIComponent(providerId) + "/configurations"
+    ),
+
+  getAdminProviderHealth: (providerId: string) =>
+    authenticatedFetch<AdminProviderHealth[]>(
+      "/admin/providers/" + encodeURIComponent(providerId) + "/health"
+    ),
+
+  createAdminProviderConfiguration: (payload: {
+    providerId: string;
+    serviceId?: string;
+    priority: number;
+    isPrimary: boolean;
+    isBackup: boolean;
+    enabled: boolean;
+    secretRef: string;
+    config?: Record<string, unknown>;
+  }) => authenticatedFetch<AdminProviderConfiguration>("/admin/providers/configurations", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  }),
+  updateAdminProviderConfiguration: (
+    id: string,
+    payload: {
+      priority: number;
+      isPrimary: boolean;
+      isBackup: boolean;
+      enabled: boolean;
+      config?: Record<string, unknown>;
+    },
+  ) =>
+    authenticatedFetch<AdminProviderConfiguration>(
+      "/admin/providers/configurations/" + encodeURIComponent(id),
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
+    ),
+
   createSellerApplication: (payload: {
     sellerType: SellerType;
     businessName: string;
@@ -493,6 +634,14 @@ passwordResetConfirm: (token: string, password: string) =>
     authenticatedFetch<MarketplaceCheckoutOrder>(
       '/marketplace/cart/checkout',
       { method: 'POST', body: JSON.stringify(input) },
+    ),
+
+  getMarketplaceCustomerOrders: () =>
+    authenticatedFetch<MarketplaceCustomerOrder[]>('/marketplace/cart/orders'),
+
+  getMarketplaceOrderPaymentStatus: (orderId: string) =>
+    authenticatedFetch<MarketplaceOrderPaymentStatus>(
+      `/payments/marketplace-orders/${encodeURIComponent(orderId)}/status`,
     ),
 
   createMarketplacePaymentIntent: (orderId: string) =>

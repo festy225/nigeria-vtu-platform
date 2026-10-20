@@ -55,6 +55,7 @@ export interface VerifyPaymentRequest {
   providerReference: string;
   amountMinor: number;
   currency: CurrencyCode;
+  providerConfiguration?: ProviderExecutionConfiguration;
 }
 
 export interface VerifyPaymentResponse {
@@ -68,6 +69,7 @@ export interface VerifyPaymentResponse {
 
 export interface VerifyWebhookRequest {
   rawPayload: unknown;
+  rawBody?: Buffer;
   headers?: Record<string, string | string[] | undefined>;
   providerConfiguration?: {
     id: string;

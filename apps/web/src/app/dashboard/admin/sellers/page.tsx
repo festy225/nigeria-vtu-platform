@@ -158,18 +158,18 @@ function SellerApplicationsContent() {
       <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
           <p className="eyebrow">CHIMZO - Administration</p>
-          <h1 className="mt-2 text-3xl font-bold tracking-tight text-white">
+          <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">
             Seller applications
           </h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
             Review submitted seller profiles and their current application and KYC statuses.
           </p>
         </div>
         <Link
           href="/dashboard/admin"
-          className="text-sm font-medium text-brand-300 hover:text-brand-200"
+          className="text-sm font-medium text-blue-700 hover:text-blue-800"
         >
-          Back to Admin workspace
+          Back to CHIMZO Admin
         </Link>
       </header>
 
@@ -187,10 +187,10 @@ function SellerApplicationsContent() {
       ) : applications.length === 0 ? (
         <Card>
           <div className="py-10 text-center">
-            <h2 className="font-semibold text-white">
+            <h2 className="font-semibold text-slate-900">
               No seller applications yet
             </h2>
-            <p className="mt-2 text-sm text-slate-400">
+            <p className="mt-2 text-sm text-slate-600">
               There are currently no seller applications to review.
             </p>
           </div>
@@ -279,13 +279,13 @@ function SellerApplicationsContent() {
 
           {filteredApplications.length === 0 ? (
             <Card>
-              <p className="py-8 text-center text-sm text-slate-400">
+              <p className="py-8 text-center text-sm text-slate-600">
                 No applications match your search or filters.
               </p>
             </Card>
           ) : (
             <>
-              <p className="text-sm text-slate-400" aria-live="polite">
+              <p className="text-sm text-slate-600" aria-live="polite">
                 Showing {filteredApplications.length} of {applications.length}{' '}
                 {applications.length === 1 ? 'application' : 'applications'}
               </p>
@@ -297,10 +297,10 @@ function SellerApplicationsContent() {
                   >
                     <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
-                        <h2 className="break-words text-lg font-semibold text-white">
+                        <h2 className="break-words text-lg font-semibold text-slate-900">
                           {application.business_name}
                         </h2>
-                        <p className="mt-1 break-words text-sm text-slate-400">
+                        <p className="mt-1 break-words text-sm text-slate-600">
                           {application.store_name}
                         </p>
                         <p className="mt-2 text-xs font-medium text-slate-500">

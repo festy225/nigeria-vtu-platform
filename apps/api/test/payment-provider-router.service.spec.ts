@@ -3,12 +3,13 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { PaymentProviderAdapterResolver } from '../src/modules/providers/adapters/payment-provider-adapter.resolver';
 import { MockPaymentProviderAdapter } from '../src/modules/providers/adapters/mock-payment-provider.adapter';
+import { PaystackPaymentProviderAdapter } from '../src/modules/providers/adapters/paystack-payment-provider.adapter';
 import { PaymentProviderRouterService } from '../src/modules/providers/routing/payment-provider-router.service';
 import type { ProviderRegistrationRecord } from '../src/modules/providers/registry/provider-registry.types';
 
 describe('PaymentProviderRouterService', () => {
   const adapter = new MockPaymentProviderAdapter();
-  const adapterResolver = new PaymentProviderAdapterResolver(adapter);
+  const adapterResolver = new PaymentProviderAdapterResolver(adapter, new PaystackPaymentProviderAdapter());
   const registry = {
     findEnabledServiceId: jest.fn(),
     findRegistrations: jest.fn(),

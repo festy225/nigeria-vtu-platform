@@ -1,10 +1,13 @@
-import type { Metadata } from 'next';
+﻿import type { Metadata } from 'next';
 import './globals.css';
 import { AuthProvider } from '@/components/providers/auth-provider';
 
 export const metadata: Metadata = {
-  title: 'Naivex',
-  description: 'Naivex digital services and marketplace platform',
+  title: {
+    default: 'CHIMZO',
+    template: '%s | CHIMZO',
+  },
+  description: 'CHIMZO digital services and global marketplace',
 };
 
 export default function RootLayout({

@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState } from 'react';
 import { useAuth } from './providers/auth-provider';
@@ -11,7 +11,11 @@ export function Header() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const displayName = user?.email ?? user?.phone ?? 'Account';
-  const role = user?.roles?.[0] ?? 'CUSTOMER';
+  const role = user?.roles?.includes('SUPER_ADMIN')
+    ? 'SUPER ADMIN'
+    : user?.roles?.includes('ADMIN')
+      ? 'ADMIN'
+      : user?.roles?.[0] ?? 'CUSTOMER';
   const initial = displayName.charAt(0).toUpperCase();
 
   return (
@@ -25,7 +29,7 @@ export function Header() {
             className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:bg-slate-50"
             aria-label="Open navigation"
           >
-            ☰
+            â˜°
           </button>
 
           <Brand compact />
@@ -71,7 +75,7 @@ export function Header() {
                 menuOpen ? 'rotate-180' : ''
               }`}
             >
-              ⌄
+              âŒ„
             </span>
           </button>
 

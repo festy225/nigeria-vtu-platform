@@ -91,7 +91,7 @@ const [fulfillmentLocationId, setFulfillmentLocationId] = useState('');
 const [fulfillmentOfficeId, setFulfillmentOfficeId] = useState('');
 const [fulfillmentBusy, setFulfillmentBusy] = useState(false);
 const [fulfillmentError, setFulfillmentError] = useState('');
-const [fulfillmentMessage, setFulfillmentMessage] = useState('');
+const [fulfillmentMessage] = useState('');
 const [refreshing, setRefreshing] = useState(false);
 
 const loadOrders = useCallback(async (isRefresh = false) => {

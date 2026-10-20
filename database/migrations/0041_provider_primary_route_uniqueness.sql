@@ -21,3 +21,7 @@ $$;
 CREATE UNIQUE INDEX provider_primary_route_unique_idx
   ON provider_configurations (service_id) NULLS NOT DISTINCT
   WHERE enabled = true AND is_primary = true;
+
+-- The new NULLS NOT DISTINCT index enforces the same rule and also
+-- covers the global NULL service_id scope. Remove the redundant index.
+DROP INDEX IF EXISTS provider_primary_route_idx;
