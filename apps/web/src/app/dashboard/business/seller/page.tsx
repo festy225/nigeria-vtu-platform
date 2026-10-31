@@ -1,6 +1,8 @@
 'use client';
 
+import Link from 'next/link';
 import { FormEvent, useEffect, useState } from 'react';
+import SellerMembershipGate from '../SellerMembershipGate';
 import {
   api,
   ApiError,
@@ -120,6 +122,7 @@ export default function SellerApplicationPage() {
   const [storeSlug, setStoreSlug] = useState('');
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const [sellerMembershipVerified, setSellerMembershipVerified] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -234,7 +237,7 @@ export default function SellerApplicationPage() {
     }
   }
 
-  if (loading) return <LoadingState label="Loading your seller application…" />;
+  if (loading) return <LoadingState label="Loading your seller applicationâ€¦" />;
 
   if (pageError) {
     return (
@@ -279,7 +282,7 @@ export default function SellerApplicationPage() {
               </h2>
               <p className="mt-2 text-sm leading-6 text-slate-500">
                 {submittedSuccessfully
-                  ? 'Your application is now awaiting review. We’ll update you when its status changes.'
+                  ? 'Your application is now awaiting review. Weâ€™ll update you when its status changes.'
                   : 'Your seller application is already on file.'}
               </p>
             </div>
@@ -338,9 +341,25 @@ export default function SellerApplicationPage() {
               </dd>
             </div>
           </dl>
+
+          {application.onboarding_status === 'APPROVED' &&
+            application.kyc_status === 'VERIFIED' && (
+              <div className="mt-6 border-t border-slate-100 pt-5">
+                <Link
+                  href="/dashboard/business/seller/dashboard"
+                  className="inline-flex items-center justify-center rounded-lg bg-[#08205B] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#123477]"
+                >
+                  Open Seller Dashboard
+                </Link>
+              </div>
+            )}
         </Card>
       </div>
     );
+  }
+
+  if (!sellerMembershipVerified) {
+    return <SellerMembershipGate onVerified={() => setSellerMembershipVerified(true)} />;
   }
 
   return (

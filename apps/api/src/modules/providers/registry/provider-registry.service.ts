@@ -151,11 +151,10 @@ export class ProviderRegistryService {
   ): Promise<ProviderConfigurationRecord> {
     if (
       typeof dto.secretRef !== 'string' ||
-      !/^env:[A-Z][A-Z0-9_]*$/.test(dto.secretRef)
+      (!/^env:[A-Z][A-Z0-9_]*$/.test(dto.secretRef) &&
+       !/^vault:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}:api_secret$/i.test(dto.secretRef))
     ) {
-      throw new BadRequestException(
-        'secretRef must use the env:VARIABLE_NAME format',
-      );
+      throw new BadRequestException('secretRef must be an env reference or a provider API-secret vault reference');
     }
 
     if (dto.isPrimary && dto.isBackup) {
@@ -185,6 +184,28 @@ export class ProviderRegistryService {
 
           if (providerResult.rowCount === 0) {
             throw new NotFoundException('Provider not found');
+          }
+
+          const apiVaultMatch = dto.secretRef.match(/^vault:([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):api_secret$/i);
+          const webhookVaultRef = dto.config?.webhookSecretRef;
+          const webhookVaultMatch =
+            typeof webhookVaultRef === 'string'
+              ? webhookVaultRef.match(/^vault:([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):webhook_secret$/i)
+              : null;
+
+          if (apiVaultMatch || webhookVaultMatch) {
+            const providerCheck = await client.query<{ adapter_key: string | null }>(
+              'SELECT adapter_key FROM api_providers WHERE id = $1',
+              [dto.providerId],
+            );
+            if (
+              providerCheck.rows[0]?.adapter_key !== 'FLUTTERWAVE' ||
+              (apiVaultMatch && apiVaultMatch[1].toLowerCase() !== dto.providerId.toLowerCase()) ||
+              (webhookVaultMatch && webhookVaultMatch[1].toLowerCase() !== dto.providerId.toLowerCase()) ||
+              (webhookVaultRef !== undefined && !webhookVaultMatch)
+            ) {
+              throw new BadRequestException('Vault references must belong to this Flutterwave provider');
+            }
           }
 
           if (dto.serviceId) {
@@ -337,8 +358,8 @@ export class ProviderRegistryService {
     dto: UpdateProviderConfigurationDto,
     updatedBy?: string,
   ): Promise<ProviderConfigurationRecord> {
-    if (dto.secretRef !== undefined && !/^env:[A-Z][A-Z0-9_]*$/.test(dto.secretRef)) {
-      throw new BadRequestException('secretRef must use the env:VARIABLE_NAME format');
+    if (dto.secretRef !== undefined && !/^env:[A-Z][A-Z0-9_]*$/.test(dto.secretRef) && !/^vault:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}:api_secret$/i.test(dto.secretRef)) {
+      throw new BadRequestException('secretRef must be an env reference or a provider API-secret vault reference');
     }
     if (dto.priority !== undefined && (!Number.isInteger(dto.priority) || dto.priority < 1 || dto.priority > 32767)) {
       throw new BadRequestException('priority must be an integer from 1 to 32767');
@@ -363,6 +384,28 @@ export class ProviderRegistryService {
         const isPrimary = dto.isPrimary ?? (dto.enabled === false ? false : current.is_primary);
         const secretRef = dto.secretRef ?? current.secret_ref;
         const config = dto.config ?? current.config ?? {};
+
+        const apiVaultMatch = secretRef.match(/^vault:([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):api_secret$/i);
+        const webhookVaultRef = config.webhookSecretRef;
+        const webhookVaultMatch =
+          typeof webhookVaultRef === 'string'
+            ? webhookVaultRef.match(/^vault:([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):webhook_secret$/i)
+            : null;
+
+        if (apiVaultMatch || webhookVaultMatch || webhookVaultRef !== undefined) {
+          const providerCheck = await client.query<{ adapter_key: string | null }>(
+            'SELECT adapter_key FROM api_providers WHERE id = $1',
+            [current.provider_id],
+          );
+          if (
+            providerCheck.rows[0]?.adapter_key !== 'FLUTTERWAVE' ||
+            (apiVaultMatch && apiVaultMatch[1].toLowerCase() !== current.provider_id.toLowerCase()) ||
+            (webhookVaultMatch && webhookVaultMatch[1].toLowerCase() !== current.provider_id.toLowerCase()) ||
+            (webhookVaultRef !== undefined && !webhookVaultMatch)
+          ) {
+            throw new BadRequestException('Vault references must belong to this Flutterwave provider');
+          }
+        }
 
         if (isPrimary && isBackup) throw new BadRequestException('A provider configuration cannot be both primary and backup');
         if (isPrimary && !enabled) throw new BadRequestException('A primary provider configuration must be enabled');

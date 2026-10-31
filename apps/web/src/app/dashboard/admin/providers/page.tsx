@@ -67,6 +67,7 @@ function ProviderAdministration() {
   const [editIsPrimary, setEditIsPrimary] = useState(false);
   const [editIsBackup, setEditIsBackup] = useState(false);
   const [editEnabled, setEditEnabled] = useState(true);
+  const [editSecretRef, setEditSecretRef] = useState("");
   const [editConfigurationJson, setEditConfigurationJson] = useState("{}");
 
   const loadProviders = useCallback(async (preferredId?: string) => {
@@ -154,6 +155,18 @@ function ProviderAdministration() {
     setNotice("");
     setSavingConfiguration(true);
     try {
+      const trimmedSecretRef = secretRef.trim();
+      const validEnvReference = /^env:[A-Z][A-Z0-9_]*$/.test(trimmedSecretRef);
+      const validFlutterwaveVaultReference =
+        selectedProvider?.adapterKey === "FLUTTERWAVE" &&
+        trimmedSecretRef === "vault:" + selectedId + ":api_secret";
+
+      if (!validEnvReference && !validFlutterwaveVaultReference) {
+        throw new Error(
+          "Use env:VARIABLE_NAME, or vault:<this Flutterwave provider ID>:api_secret."
+        );
+      }
+
       const config = parseObject(configurationJson, "Configuration");
       await api.createAdminProviderConfiguration({
         providerId: selectedId,
@@ -162,7 +175,7 @@ function ProviderAdministration() {
         isPrimary,
         isBackup,
         enabled,
-        secretRef: secretRef.trim(),
+        secretRef: trimmedSecretRef,
         ...(config ? { config } : {}),
       });
       setServiceId("");
@@ -190,6 +203,7 @@ function ProviderAdministration() {
     setEditIsPrimary(item.isPrimary);
     setEditIsBackup(item.isBackup);
     setEditEnabled(item.enabled);
+    setEditSecretRef(item.secretRef);
     setEditConfigurationJson(JSON.stringify(item.config ?? {}, null, 2));
     setShowConfigurationForm(false);
     setError("");
@@ -212,12 +226,25 @@ function ProviderAdministration() {
         editConfigurationJson,
         "Configuration",
       );
+      const trimmedSecretRef = editSecretRef.trim();
+
+            const validEnvReference = /^env:[A-Z][A-Z0-9_]*$/.test(trimmedSecretRef);
+      const validFlutterwaveVaultReference =
+        selectedProvider?.adapterKey === "FLUTTERWAVE" &&
+        trimmedSecretRef === "vault:" + selectedId + ":api_secret";
+
+      if (!validEnvReference && !validFlutterwaveVaultReference) {
+        throw new Error(
+          "Use env:VARIABLE_NAME, or vault:<this Flutterwave provider ID>:api_secret."
+        );
+      }
 
       await api.updateAdminProviderConfiguration(configurationId, {
         priority: Number(editPriority),
         isPrimary: editIsPrimary,
         isBackup: editIsBackup,
         enabled: editEnabled,
+        secretRef: trimmedSecretRef,
         ...(parsedConfig ? { config: parsedConfig } : {}),
       });
 
@@ -471,6 +498,13 @@ function ProviderAdministration() {
             )}
           </Card>
 
+          {isSuperAdmin && selectedProvider?.adapterKey === "FLUTTERWAVE" && (
+            <FlutterwaveCredentialsPanel
+              providerId={selectedProvider.id}
+              isSuperAdmin={isSuperAdmin}
+            />
+          )}
+
           <Card>
             <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
               <div>
@@ -529,7 +563,7 @@ function ProviderAdministration() {
                     Secret reference
                     <input
                       required
-                      pattern="env:[A-Z][A-Z0-9_]*"
+                      pattern="(env:[A-Z][A-Z0-9_]*|vault:[0-9a-fA-F-]{36}:api_secret)"
                       title="Use env:VARIABLE_NAME format"
                       value={secretRef}
                       onChange={(event) => setSecretRef(event.target.value)}
@@ -660,10 +694,25 @@ function ProviderAdministration() {
                             className="mt-4 space-y-4 rounded-xl border border-slate-200 p-4"
                           >
                             <p className="text-sm text-slate-500">
-                              Edit routing and non-secret configuration only.
-                              Credential values and secret references are not
-                              displayed or changed by this form.
+                              Edit routing and configuration references here.
+                              Enter a server-side environment variable reference
+                              only. Never enter an actual credential or secret.
                             </p>
+
+                            <label className="block text-sm text-slate-700">
+                              Secret reference
+                              <input
+                                required
+                                pattern="(env:[A-Z][A-Z0-9_]*|vault:[0-9a-fA-F-]{36}:api_secret)"
+                                title="Use env:VARIABLE_NAME format"
+                                value={editSecretRef}
+                                onChange={(event) =>
+                                  setEditSecretRef(event.target.value)
+                                }
+                                className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 font-mono text-slate-900"
+                                placeholder="env:FLUTTERWAVE_SECRET_KEY"
+                              />
+                            </label>
 
                             <label className="block text-sm text-slate-700">
                               Priority (1?32767)
@@ -838,5 +887,210 @@ export default function AdminProvidersPage() {
       {" "}
       <ProviderAdministration />{" "}
     </ProtectedRoute>
+  );
+}
+
+function FlutterwaveCredentialsPanel({
+  providerId,
+  isSuperAdmin,
+}: {
+  providerId: string;
+  isSuperAdmin: boolean;
+}) {
+  const [status, setStatus] = useState<{
+    hasApiSecret: boolean;
+    hasWebhookSecret: boolean;
+  } | null>(null);
+
+  const [apiSecret, setApiSecret] = useState("");
+  const [webhookSecret, setWebhookSecret] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    let active = true;
+
+    setLoading(true);
+    setError("");
+
+    api.getAdminProviderSecretStatus(providerId)
+      .then((result) => {
+        if (active) setStatus(result);
+      })
+      .catch((requestError) => {
+        if (active) {
+          setError(
+            requestError instanceof Error
+              ? requestError.message
+              : "Could not load credential status."
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [providerId]);
+
+  async function saveCredentials(
+    event: React.FormEvent<HTMLFormElement>
+  ) {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+
+    const payload: {
+      apiSecret?: string;
+      webhookSecret?: string;
+    } = {};
+
+    if (apiSecret.trim()) {
+      payload.apiSecret = apiSecret.trim();
+    }
+
+    if (webhookSecret.trim()) {
+      payload.webhookSecret = webhookSecret.trim();
+    }
+
+    if (!payload.apiSecret && !payload.webhookSecret) {
+      setError("Enter at least one credential to save.");
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      const result = await api.updateAdminProviderSecrets(
+        providerId,
+        payload
+      );
+
+      setStatus(result);
+      setApiSecret("");
+      setWebhookSecret("");
+      setNotice(
+        "Flutterwave credentials saved securely. Secret values are not displayed."
+      );
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Could not save Flutterwave credentials."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!isSuperAdmin) return null;
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="mb-4">
+        <h2 className="text-lg font-semibold text-slate-900">
+          Flutterwave credentials
+        </h2>
+        <p className="mt-1 text-sm text-slate-600">
+          Credentials are encrypted and stored on the server.
+          Leave a field blank to preserve its existing value.
+        </p>
+      </div>
+
+      <div className="mb-4 grid gap-3 sm:grid-cols-2">
+        <div className="rounded-xl bg-slate-50 p-3">
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+            API secret
+          </p>
+          <p className="mt-1 text-sm font-semibold text-slate-800">
+            {loading
+              ? "Checking..."
+              : status?.hasApiSecret
+                ? "Configured"
+                : "Not configured"}
+          </p>
+        </div>
+
+        <div className="rounded-xl bg-slate-50 p-3">
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+            Webhook secret
+          </p>
+          <p className="mt-1 text-sm font-semibold text-slate-800">
+            {loading
+              ? "Checking..."
+              : status?.hasWebhookSecret
+                ? "Configured"
+                : "Not configured"}
+          </p>
+        </div>
+      </div>
+
+      <form onSubmit={saveCredentials} className="space-y-4">
+        <div>
+          <label
+            className="mb-1 block text-sm font-medium text-slate-700"
+            htmlFor="flutterwave-api-secret"
+          >
+            Flutterwave API secret
+          </label>
+          <input
+            id="flutterwave-api-secret"
+            type="password"
+            autoComplete="new-password"
+            value={apiSecret}
+            onChange={(event) => setApiSecret(event.target.value)}
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            placeholder="Enter API secret"
+          />
+        </div>
+
+        <div>
+          <label
+            className="mb-1 block text-sm font-medium text-slate-700"
+            htmlFor="flutterwave-webhook-secret"
+          >
+            Flutterwave webhook secret
+          </label>
+          <input
+            id="flutterwave-webhook-secret"
+            type="password"
+            autoComplete="new-password"
+            value={webhookSecret}
+            onChange={(event) => setWebhookSecret(event.target.value)}
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            placeholder="Enter webhook secret"
+          />
+        </div>
+
+        {error && (
+          <p role="alert" className="text-sm text-red-600">
+            {error}
+          </p>
+        )}
+
+        {notice && (
+          <p role="status" className="text-sm text-emerald-700">
+            {notice}
+          </p>
+        )}
+
+        <button
+          type="submit"
+          disabled={
+            saving ||
+            (!apiSecret.trim() && !webhookSecret.trim())
+          }
+          className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {saving
+            ? "Saving securely..."
+            : "Save Flutterwave credentials"}
+        </button>
+      </form>
+    </section>
   );
 }

@@ -13,6 +13,7 @@ interface MarketplaceCatalogProductRow {
   seller_name: string;
   name: string;
   description: string;
+  image_url: string | null;
   price_minor: string | number | null;
   currency: CurrencyCode | null;
   has_variants: boolean;
@@ -38,6 +39,7 @@ export interface MarketplaceCatalogProduct {
   sellerName: string;
   name: string;
   description: string;
+  imageUrl: string | null;
   hasVariants: boolean;
   priceMinor: number | null;
   currency: CurrencyCode | null;
@@ -66,7 +68,7 @@ export class MarketplaceCatalogService {
     const result = await this.database.query<MarketplaceCatalogProductRow>(
       `SELECT product.id, product.category_id, category.name AS category_name,
               seller.store_name AS seller_name, product.name,
-              product.description, product.price_minor::text AS price_minor,
+              product.description, product.image_url, product.price_minor::text AS price_minor,
               product.currency,
               EXISTS (
                 SELECT 1
@@ -90,7 +92,7 @@ export class MarketplaceCatalogService {
     const result = await this.database.query<MarketplaceCatalogProductRow>(
       `SELECT product.id, product.category_id, category.name AS category_name,
               seller.store_name AS seller_name, product.name,
-              product.description, product.price_minor::text AS price_minor,
+              product.description, product.image_url, product.price_minor::text AS price_minor,
               product.currency,
               EXISTS (
                 SELECT 1
@@ -189,6 +191,7 @@ export class MarketplaceCatalogService {
       sellerName: row.seller_name,
       name: row.name,
       description: row.description,
+      imageUrl: row.image_url,
       hasVariants: row.has_variants,
       priceMinor:
         row.price_minor === null ? null : this.toSafeMinor(row.price_minor),

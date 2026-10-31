@@ -52,6 +52,7 @@ describe('SellerService marketplace products', () => {
           category_id: 'category-id',
           name: 'Product name',
           description: 'Required product description',
+          image_url: 'https://cdn.example.com/product.jpg',
           price_minor: '1500',
           currency: 'USD',
           status: 'DRAFT',
@@ -63,6 +64,7 @@ describe('SellerService marketplace products', () => {
       categoryId: 'category-id',
       name: ' Product name ',
       description: ' Required product description ',
+      imageUrl: 'https://cdn.example.com/product.jpg',
       priceMinor: 1500,
       currency: 'USD',
     });
@@ -83,6 +85,7 @@ describe('SellerService marketplace products', () => {
       'category-id',
       'Product name',
       'Required product description',
+      'https://cdn.example.com/product.jpg',
       1500,
       'USD',
     ]);
@@ -224,6 +227,66 @@ describe('SellerService marketplace products', () => {
     );
   });
 
+  it('stores and clears a seller product image URL', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'product-id', seller_id: 'seller-id', category_id: 'category-id',
+          name: 'Product', description: 'Description',
+          image_url: 'https://cdn.example.com/old.jpg',
+          price_minor: '1000', currency: 'USD', status: 'DRAFT',
+          has_variants: false, enabled: false,
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'product-id', seller_id: 'seller-id', category_id: 'category-id',
+          name: 'Product', description: 'Description',
+          image_url: 'https://cdn.example.com/new.jpg',
+          price_minor: '1000', currency: 'USD', status: 'DRAFT', enabled: false,
+        }],
+      });
+
+    const updatedProduct = await service.updateSellerProduct('user-id', 'product-id', {
+      imageUrl: 'https://cdn.example.com/new.jpg',
+    });
+
+    expect(String(client.query.mock.calls[1]?.[0])).toContain('image_url = $4');
+    expect(client.query.mock.calls[1]?.[1]).toEqual([
+      'category-id', 'Product', 'Description',
+      'https://cdn.example.com/new.jpg', 1000, 'USD', 'product-id', 'seller-id',
+    ]);
+    expect(updatedProduct.image_url).toBe('https://cdn.example.com/new.jpg');
+
+    client.query.mockReset()
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'product-id', seller_id: 'seller-id', category_id: 'category-id',
+          name: 'Product', description: 'Description',
+          image_url: 'https://cdn.example.com/new.jpg',
+          price_minor: '1000', currency: 'USD', status: 'DRAFT',
+          has_variants: false, enabled: false,
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'product-id', seller_id: 'seller-id', category_id: 'category-id',
+          name: 'Product', description: 'Description', image_url: null,
+          price_minor: '1000', currency: 'USD', status: 'DRAFT', enabled: false,
+        }],
+      });
+
+    const clearedProduct = await service.updateSellerProduct('user-id', 'product-id', {
+      imageUrl: null,
+    });
+
+    expect(client.query.mock.calls[1]?.[1]).toEqual([
+      'category-id', 'Product', 'Description', null, 1000, 'USD',
+      'product-id', 'seller-id',
+    ]);
+    expect(clearedProduct.image_url).toBeNull();
+  });
+
   it('updates a simple product price for the authenticated seller and audits the change', async () => {
     client.query
       .mockResolvedValueOnce({
@@ -233,6 +296,7 @@ describe('SellerService marketplace products', () => {
           category_id: 'category-id',
           name: 'Product',
           description: 'Description',
+          image_url: 'https://cdn.example.com/existing.jpg',
           price_minor: '1000',
           currency: 'USD',
           status: 'DRAFT',
@@ -246,6 +310,7 @@ describe('SellerService marketplace products', () => {
           category_id: 'category-id',
           name: 'Product',
           description: 'Description',
+          image_url: 'https://cdn.example.com/existing.jpg',
           price_minor: '2000',
           currency: 'USD',
           status: 'DRAFT',
@@ -262,6 +327,7 @@ describe('SellerService marketplace products', () => {
       'category-id',
       'Product',
       'Description',
+      'https://cdn.example.com/existing.jpg',
       2000,
       'USD',
       'product-id',
@@ -414,6 +480,24 @@ describe('SellerService marketplace products', () => {
     expect(updateErrors.map((error) => error.property)).toEqual(
       expect.arrayContaining(['sellerId', 'status', 'enabled']),
     );
+  });
+
+  it('accepts optional HTTP image URLs and rejects invalid image URLs', async () => {
+    const validCreate = Object.assign(new CreateMarketplaceProductDto(), {
+      categoryId: '123e4567-e89b-12d3-a456-426614174000',
+      name: 'Product', description: 'Description', priceMinor: 1500,
+      currency: 'USD', imageUrl: 'https://cdn.example.com/product.jpg',
+    });
+    const invalidUpdate = Object.assign(new UpdateMarketplaceProductDto(), {
+      imageUrl: 'javascript:alert(1)',
+    });
+    const nullUpdate = Object.assign(new UpdateMarketplaceProductDto(), {
+      imageUrl: null,
+    });
+
+    expect(await validate(validCreate)).toEqual([]);
+    expect((await validate(invalidUpdate)).map((error) => error.property)).toContain('imageUrl');
+    expect(await validate(nullUpdate)).toEqual([]);
   });
 
   it('requires product description in create requests', async () => {

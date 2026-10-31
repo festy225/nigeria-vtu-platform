@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+﻿import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { SellerService } from '../src/modules/sellers/seller.service';
 import type { ReviewSellerApplicationDto } from '../src/modules/sellers/seller.dtos';
 
@@ -147,6 +147,49 @@ describe('SellerService membership eligibility', () => {
     expect(insert).not.toMatch(/roles|user_roles|business_membership_entitlements/i);
   });
 
+
+  it("returns the authenticated user's existing seller application", async () => {
+    const application = {
+      id: 'seller-id',
+      user_id: 'authenticated-user-id',
+      store_name: 'Example Store',
+      onboarding_status: 'SUBMITTED',
+      kyc_status: 'PENDING',
+    };
+
+    database.query.mockResolvedValueOnce({
+      rows: [application],
+      rowCount: 1,
+    });
+
+    await expect(
+      service.getApplication('authenticated-user-id'),
+    ).resolves.toEqual(application);
+
+    expect(database.query).toHaveBeenCalledTimes(1);
+    expect(database.query.mock.calls[0]?.[1]).toEqual([
+      'authenticated-user-id',
+    ]);
+    expect(database.query.mock.calls[0]?.[0]).toContain(
+      'WHERE user_id = $1',
+    );
+  });
+
+  it('throws NotFoundException when the authenticated user has no seller application', async () => {
+    database.query.mockResolvedValueOnce({
+      rows: [],
+      rowCount: 0,
+    });
+
+    await expect(
+      service.getApplication('authenticated-user-id'),
+    ).rejects.toThrow(NotFoundException);
+
+    expect(database.query).toHaveBeenCalledTimes(1);
+    expect(database.query.mock.calls[0]?.[1]).toEqual([
+      'authenticated-user-id',
+    ]);
+  });
   it('does not inspect or update roles, seller type, KYC, or approval state for eligibility', async () => {
     setEligibility(true);
 

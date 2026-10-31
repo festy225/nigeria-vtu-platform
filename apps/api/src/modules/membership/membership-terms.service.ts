@@ -19,6 +19,46 @@ export interface MembershipTermsAcceptance {
 export class MembershipTermsService {
   constructor(private readonly db: DatabaseService) {}
 
+  async listEnabledPrograms() {
+    const result = await this.db.query<{
+      id: string;
+      program_code: string;
+      display_name: string;
+      description: string | null;
+      monthly_price_minor: string | null;
+      annual_price_minor: string | null;
+      currency: string;
+      terms_version: string;
+    }>(
+      `SELECT
+         id,
+         program_code,
+         display_name,
+         description,
+         monthly_price_minor::text AS monthly_price_minor,
+         annual_price_minor::text AS annual_price_minor,
+         currency,
+         terms_version
+       FROM business_membership_programs
+       WHERE enabled = TRUE
+       ORDER BY program_code`,
+    );
+
+    return result.rows.map((program) => ({
+      id: program.id,
+      programCode: program.program_code,
+      displayName: program.display_name,
+      description: program.description,
+      monthlyPriceMinor: program.monthly_price_minor === null
+        ? null
+        : Number(program.monthly_price_minor),
+      annualPriceMinor: program.annual_price_minor === null
+        ? null
+        : Number(program.annual_price_minor),
+      currency: program.currency,
+      termsVersion: program.terms_version,
+    }));
+  }
   async acceptCurrentTerms(
     userId: string,
     membershipProgramId: string,

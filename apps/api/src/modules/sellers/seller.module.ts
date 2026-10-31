@@ -18,6 +18,8 @@ import {
 import { MarketplaceInventoryService } from './marketplace-inventory.service';
 import { MarketplaceCatalogController } from './marketplace-catalog.controller';
 import { MarketplaceCatalogService } from './marketplace-catalog.service';
+import { MarketplaceProductMediaController } from './marketplace-product-media.controller';
+import { MarketplaceProductMediaService } from './marketplace-product-media.service';
 
 @Module({
   imports: [AuditModule],
@@ -30,6 +32,7 @@ import { MarketplaceCatalogService } from './marketplace-catalog.service';
     MarketplaceProductInventoryController,
     MarketplaceVariantInventoryController,
     MarketplaceCatalogController,
+    MarketplaceProductMediaController,
   ],
   providers: [
     SellerService,
@@ -39,6 +42,7 @@ import { MarketplaceCatalogService } from './marketplace-catalog.service';
     MarketplaceProductVariantService,
     MarketplaceInventoryService,
     MarketplaceCatalogService,
+    MarketplaceProductMediaService,
     FeatureGuard,
   ],
   exports: [SellerService],

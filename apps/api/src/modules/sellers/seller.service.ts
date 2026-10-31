@@ -46,6 +46,7 @@ export interface MarketplaceProductRow {
   category_id: string;
   name: string;
   description: string;
+  image_url: string | null;
   price_minor: string | number | null;
   currency: CurrencyCode | null;
   status: string;
@@ -168,23 +169,25 @@ export class SellerService {
            seller_id,
            category_id,
            name,
-           description,
-           price_minor,
-           currency
-         )
-         VALUES ($1, $2, $3, $4, $5, $6::currency_code)
-         RETURNING id, seller_id, category_id, name, description,
-                   price_minor, currency, status, enabled,
-                   created_at, updated_at`,
+     description,
+     image_url,
+     price_minor,
+     currency
+   )
+   VALUES ($1, $2, $3, $4, $5, $6, $7::currency_code)
+   RETURNING id, seller_id, category_id, name, description,
+             image_url, price_minor, currency, status, enabled,
+             created_at, updated_at`,
         [
           seller.id,
           dto.categoryId,
           name,
-          description,
-          dto.priceMinor,
-          dto.currency,
-        ],
-      );
+           description,
+           dto.imageUrl ?? null,
+           dto.priceMinor,
+           dto.currency,
+         ],
+       );
       const product = result.rows[0];
 
       await this.audit.record(
@@ -212,7 +215,7 @@ export class SellerService {
     const result = await this.database.query<MarketplaceProductRow>(
       `SELECT product.id, product.seller_id, product.category_id,
               product.name, product.description,
-              product.price_minor, product.currency, product.status,
+              product.image_url, product.price_minor, product.currency, product.status,
               product.enabled, product.created_at, product.updated_at
        FROM marketplace_products product
        JOIN marketplace_sellers seller ON seller.id = product.seller_id
@@ -227,7 +230,7 @@ export class SellerService {
     const result = await this.database.query<MarketplaceProductRow>(
       `SELECT product.id, product.seller_id, product.category_id,
               product.name, product.description,
-              product.price_minor, product.currency, product.status,
+              product.image_url, product.price_minor, product.currency, product.status,
               product.enabled, product.created_at, product.updated_at
        FROM marketplace_products product
        JOIN marketplace_sellers seller ON seller.id = product.seller_id
@@ -261,7 +264,7 @@ export class SellerService {
       const currentResult = await client.query<EditableMarketplaceProductRow>(
         `SELECT product.id, product.seller_id, product.category_id,
                 product.name, product.description,
-                product.price_minor, product.currency, product.status,
+                product.image_url, product.price_minor, product.currency, product.status,
                 EXISTS (
                   SELECT 1
                   FROM marketplace_product_variants variant
@@ -336,17 +339,19 @@ export class SellerService {
          SET category_id = $1,
              name = $2,
              description = $3,
-             price_minor = $4,
-             currency = $5::currency_code,
+             image_url = $4,
+             price_minor = $5,
+             currency = $6::currency_code,
              updated_at = now()
-         WHERE id = $6 AND seller_id = $7
+         WHERE id = $7 AND seller_id = $8
          RETURNING id, seller_id, category_id, name, description,
-                   price_minor, currency, status, enabled,
+                   image_url, price_minor, currency, status, enabled,
                    created_at, updated_at`,
         [
           categoryId,
           dto.name?.trim() ?? current.name,
           dto.description?.trim() ?? current.description,
+          dto.imageUrl === undefined ? current.image_url : dto.imageUrl,
           priceMinor,
           currency,
           productId,

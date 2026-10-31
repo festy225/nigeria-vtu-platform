@@ -21,17 +21,17 @@ export class MarketplaceFulfillmentService {
     private readonly providerSecretResolver: ProviderSecretResolver,
   ) {}
 
-  private providerExecutionConfiguration(registration: {
+  private async providerExecutionConfiguration(registration: {
     configuration: {
       id: string;
       config: Record<string, unknown>;
       secretRef: string;
     };
-  }): LogisticsProviderExecutionConfiguration {
+  }): Promise<LogisticsProviderExecutionConfiguration> {
     return {
       id: registration.configuration.id,
       config: registration.configuration.config,
-      credentials: this.providerSecretResolver.resolve(
+      credentials: await this.providerSecretResolver.resolveAsync(
         registration.configuration.secretRef,
       ),
     };
@@ -281,7 +281,7 @@ export class MarketplaceFulfillmentService {
       );
 
     const result = await provider.provider.findOffices({
-providerConfiguration: this.providerExecutionConfiguration(provider),
+providerConfiguration: await this.providerExecutionConfiguration(provider),
       origin: {
         addressLine1: fulfillmentRow.origin_snapshot.address_line1,
         addressLine2: fulfillmentRow.origin_snapshot.address_line2,
@@ -389,7 +389,7 @@ providerConfiguration: this.providerExecutionConfiguration(provider),
       );
 
     const result = await provider.provider.checkServiceability({
-providerConfiguration: this.providerExecutionConfiguration(provider),
+providerConfiguration: await this.providerExecutionConfiguration(provider),
       origin: {
         addressLine1: fulfillmentRow.origin_snapshot.address_line1,
         addressLine2: fulfillmentRow.origin_snapshot.address_line2,
@@ -502,7 +502,7 @@ providerConfiguration: this.providerExecutionConfiguration(provider),
         );
 
       const result = await provider.provider.findOffices({
-providerConfiguration: this.providerExecutionConfiguration(provider),
+providerConfiguration: await this.providerExecutionConfiguration(provider),
         origin: {
           addressLine1: fulfillmentRow.origin_snapshot.address_line1,
           addressLine2: fulfillmentRow.origin_snapshot.address_line2,
@@ -801,7 +801,7 @@ providerConfiguration: this.providerExecutionConfiguration(provider),
 
       try {
         lookup = await provider.provider.lookupBooking({
-providerConfiguration: this.providerExecutionConfiguration(provider),
+providerConfiguration: await this.providerExecutionConfiguration(provider),
           idempotencyKey: booking.idempotencyKey,
         });
       } catch {
@@ -826,7 +826,7 @@ providerConfiguration: this.providerExecutionConfiguration(provider),
         // The exact original key is retained.
         try {
           result = await provider.provider.bookShipment({
-providerConfiguration: this.providerExecutionConfiguration(provider),
+providerConfiguration: await this.providerExecutionConfiguration(provider),
             idempotencyKey: booking.idempotencyKey,
             origin: {
               addressLine1: row.origin_snapshot.address_line1,
@@ -862,7 +862,7 @@ providerConfiguration: this.providerExecutionConfiguration(provider),
     } else {
       try {
         result = await provider.provider.bookShipment({
-providerConfiguration: this.providerExecutionConfiguration(provider),
+providerConfiguration: await this.providerExecutionConfiguration(provider),
           idempotencyKey: booking.idempotencyKey,
           origin: {
             addressLine1: row.origin_snapshot.address_line1,
@@ -1006,7 +1006,7 @@ providerConfiguration: this.providerExecutionConfiguration(provider),
       );
 
     const tracking = await registration.provider.trackShipment({
-providerConfiguration: this.providerExecutionConfiguration(registration),
+providerConfiguration: await this.providerExecutionConfiguration(registration),
       trackingReference: fulfillment.tracking_reference,
     });
 

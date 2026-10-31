@@ -77,7 +77,12 @@ const migrations = [
   '0044_marketplace_fulfillment_booking_recovery_claims.sql',
   '0045_finance_currency_exchange_rates.sql',
   '0046_finance_general_ledger.sql',
-  '0047_marketplace_default_categories.sql'
+  '0047_marketplace_default_categories.sql',
+
+  '0048_marketplace_product_images.sql',
+  '0049_admin_fee_configuration.sql',
+  '0050_marketplace_product_media.sql',
+  '0051_provider_secrets_vault.sql'
 ];
 
 const migrationsDirectory = resolve(repoRoot, 'database/migrations');
@@ -120,6 +125,22 @@ try {
         if (statements.length !== 5) {
           throw new Error(
             'Expected 5 SQL statements in ' + migration +
+            ', found ' + statements.length + '.',
+          );
+        }
+
+        for (const statement of statements) {
+          await client.query(statement);
+        }
+      } else if (migration === '0051_provider_secrets_vault.sql') {
+        const statements = sql
+          .split(/;\s*(?:\r?\n|$)/)
+          .map((statement) => statement.trim())
+          .filter(Boolean);
+
+        if (statements.length !== 2) {
+          throw new Error(
+            'Expected 2 SQL statements in ' + migration +
             ', found ' + statements.length + '.',
           );
         }

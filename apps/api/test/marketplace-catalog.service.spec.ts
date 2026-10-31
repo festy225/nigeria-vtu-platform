@@ -17,7 +17,7 @@ describe('MarketplaceCatalogService', () => {
     seller_name: 'Seller store',
     name: 'Configured product',
     description: 'Product description',
-    price_minor: '1250',
+    image_url: null,    price_minor: '1250',
     currency: 'NGN',
     has_variants: false,
   };
@@ -37,7 +37,7 @@ describe('MarketplaceCatalogService', () => {
         sellerName: product.seller_name,
         name: product.name,
         description: product.description,
-        hasVariants: false,
+        imageUrl: null,        hasVariants: false,
         priceMinor: 1250,
         currency: 'NGN',
       },

@@ -2,15 +2,17 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import type { PaymentProvider } from '../interfaces/payment-provider.interface';
 import { MockPaymentProviderAdapter } from './mock-payment-provider.adapter';
 import { PaystackPaymentProviderAdapter } from './paystack-payment-provider.adapter';
+import { FlutterwavePaymentProviderAdapter } from './flutterwave-payment-provider.adapter';
 
 @Injectable()
 export class PaymentProviderAdapterResolver {
   private readonly adapters: Map<string, PaymentProvider>;
 
-  constructor(mockPaymentProvider: MockPaymentProviderAdapter, paystackPaymentProvider: PaystackPaymentProviderAdapter) {
+  constructor(mockPaymentProvider: MockPaymentProviderAdapter, paystackPaymentProvider: PaystackPaymentProviderAdapter, flutterwavePaymentProvider: FlutterwavePaymentProviderAdapter) {
     this.adapters = new Map<string, PaymentProvider>([
       [mockPaymentProvider.name, mockPaymentProvider],
       [paystackPaymentProvider.name, paystackPaymentProvider],
+      [flutterwavePaymentProvider.name, flutterwavePaymentProvider],
     ]);
   }
 

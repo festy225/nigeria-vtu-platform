@@ -25,8 +25,16 @@ export default function HomePage() {
             <p className="text-sm uppercase tracking-[0.2em] text-emerald-400">Platform Foundation</p>
             <h1 className="mt-3 text-4xl font-bold">Nigerian VTU Platform</h1>
           </div>
-          <div className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-300">
-            Frontend ready
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-300">
+              Frontend ready
+            </div>
+            <a
+              href="/dashboard/business/seller"
+              className="inline-flex min-h-11 items-center justify-center rounded-lg bg-emerald-400 px-5 py-2 text-sm font-bold text-slate-950 transition hover:bg-emerald-300"
+            >
+              Become a Seller
+            </a>
           </div>
         </header>
 

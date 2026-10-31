@@ -35,6 +35,13 @@ const sections = [
     marker: "S",
     access: ["SUPER_ADMIN"],
   },
+  {
+    title: "Fees & membership",
+    description: "Configure membership prices and platform fee rules with audit history.",
+    href: "/dashboard/admin/fees",
+    marker: "$",
+    access: ["SUPER_ADMIN"],
+  },
 ];
 
 function AdminWorkspace() {
@@ -132,10 +139,10 @@ function AdminWorkspace() {
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <p className="text-sm font-medium text-slate-500">Provider records</p>
             <p className="mt-3 text-3xl font-bold text-[#08205B]" aria-live="polite">
-              {overviewLoading && providerCount === null ? "Loading…" : providerCount ?? "Unavailable"}
+              {overviewLoading && providerCount === null ? "Loadingâ€¦" : providerCount ?? "Unavailable"}
             </p>
             <Link href="/dashboard/admin/providers" className="mt-3 inline-block text-sm font-semibold text-blue-700">
-              Manage providers →
+              Manage providers â†’
             </Link>
           </div>
 
@@ -144,20 +151,20 @@ function AdminWorkspace() {
               <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <p className="text-sm font-medium text-slate-500">Registered accounts</p>
                 <p className="mt-3 text-3xl font-bold text-[#08205B]" aria-live="polite">
-                  {overviewLoading && userCount === null ? "Loading…" : userCount ?? "Unavailable"}
+                  {overviewLoading && userCount === null ? "Loadingâ€¦" : userCount ?? "Unavailable"}
                 </p>
                 <Link href="/dashboard/admin/users" className="mt-3 inline-block text-sm font-semibold text-blue-700">
-                  Manage users →
+                  Manage users â†’
                 </Link>
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <p className="text-sm font-medium text-slate-500">Seller applications</p>
                 <p className="mt-3 text-3xl font-bold text-[#08205B]" aria-live="polite">
-                  {overviewLoading && sellerApplicationCount === null ? "Loading…" : sellerApplicationCount ?? "Unavailable"}
+                  {overviewLoading && sellerApplicationCount === null ? "Loadingâ€¦" : sellerApplicationCount ?? "Unavailable"}
                 </p>
                 <Link href="/dashboard/admin/sellers" className="mt-3 inline-block text-sm font-semibold text-blue-700">
-                  Review applications →
+                  Review applications â†’
                 </Link>
               </div>
             </>

@@ -14,7 +14,7 @@ export class UpdateProviderConfigurationDto {
   enabled?: boolean;
 
   @IsOptional() @IsString() @MinLength(1) @MaxLength(255)
-  @Matches(/^env:[A-Z][A-Z0-9_]*$/, { message: 'secretRef must use the env:VARIABLE_NAME format' })
+  @Matches(/^(?:env:[A-Z][A-Z0-9_]*|vault:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}:api_secret)$/i, { message: 'secretRef must be an environment reference or a provider API-secret vault reference' })
   secretRef?: string;
 
   @IsOptional() @IsObject()

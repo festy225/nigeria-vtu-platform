@@ -45,6 +45,13 @@ export class PaymentController {
     );
   }
 
+  @Get('membership/:paymentId/status')
+  getMembershipPaymentStatus(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('paymentId', new ParseUUIDPipe()) paymentId: string,
+  ) {
+    return this.payments.getMembershipPaymentStatus(user.id, paymentId);
+  }
   @UseGuards(FeatureGuard)
   @RequiresFeature('MARKETPLACE_ENABLED')
   @Get('marketplace-orders/:orderId/status')

@@ -1,11 +1,14 @@
 import { Type } from 'class-transformer';
 import {
   IsInt,
+  IsOptional,
   IsString,
   IsUUID,
   Length,
   Max,
+  MaxLength,
   Min,
+  IsUrl,
 } from 'class-validator';
 import type { CurrencyCode } from '@nigeria-vtu-platform/shared';
 
@@ -29,4 +32,10 @@ export class CreateMarketplaceProductDto {
 
   @IsString()
   currency!: CurrencyCode;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  @IsUrl({ protocols: ['http', 'https'], require_protocol: true })
+  imageUrl?: string | null;
 }

@@ -878,9 +878,9 @@ const marketplaceCartService = {
     payment_state: state,
     payment_purpose: purpose,
     provider_configuration_id:
-      purpose === 'MARKETPLACE_ORDER'
-        ? 'provider-configuration-id'
-        : null,
+      purpose === 'WALLET_FUNDING'
+        ? null
+        : 'provider-configuration-id',
     membership_program_id:
       purpose === 'BUSINESS_MEMBERSHIP' ? validRequest.membershipProgramId : null,
     payment_provider_name: provider.name,

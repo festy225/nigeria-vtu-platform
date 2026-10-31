@@ -203,9 +203,19 @@ export class PaymentService {
 
     let providerName: string | undefined;
     try {
-      const provider = await this.providers.getProvider();
+      const providerRegistration =
+        await this.providers.getProviderRegistration();
+      const provider = providerRegistration.provider;
       providerName = provider.name;
+
       const response = await provider.initializePayment({
+        providerConfiguration: {
+          id: providerRegistration.configuration.id,
+          config: providerRegistration.configuration.config,
+          credentials: await this.providerSecretResolver.resolveAsync(
+            providerRegistration.configuration.secretRef,
+          ),
+        },
         paymentReference: initialization.row.payment_reference,
         amountMinor: Number(initialization.row.payment_amount_minor),
         currency: initialization.row.payment_currency,
@@ -416,9 +426,19 @@ if (response.status !== 'PENDING') {
 
     let providerName: string | undefined;
     try {
-      const provider = await this.providers.getProvider();
+      const providerRegistration =
+        await this.providers.getProviderRegistration();
+      const provider = providerRegistration.provider;
       providerName = provider.name;
+
       const response = await provider.initializePayment({
+        providerConfiguration: {
+          id: providerRegistration.configuration.id,
+          config: providerRegistration.configuration.config,
+          credentials: await this.providerSecretResolver.resolveAsync(
+            providerRegistration.configuration.secretRef,
+          ),
+        },
         paymentReference: initialization.row.payment_reference,
         amountMinor: Number(initialization.row.payment_amount_minor),
         currency: initialization.row.payment_currency,
@@ -444,17 +464,20 @@ if (response.status !== 'PENDING') {
              provider_reference = $2,
              provider_status = $3,
              provider_checkout_url = $4,
-             provider_metadata = $5
-         WHERE id = $6
+             provider_metadata = $5,
+             provider_configuration_id = $6
+         WHERE id = $7
            AND state = 'PENDING'
            AND purpose = 'BUSINESS_MEMBERSHIP'
-           AND provider_status = 'INITIALIZING'`,
+           AND provider_status = 'INITIALIZING'
+           AND provider_configuration_id IS NULL`,
         [
           response.providerName,
           response.providerReference,
           response.status,
           response.checkoutUrl,
           JSON.stringify({ status: response.status }),
+          providerRegistration.providerConfigurationId,
           initialization.row.payment_id,
         ],
       );
@@ -487,6 +510,68 @@ if (response.status !== 'PENDING') {
     }
   }
 
+  async getMembershipPaymentStatus(userId: string, paymentId: string) {
+    const result = await this.db.query<{
+      id: string;
+      reference: string;
+      state: string;
+      purpose: string;
+      amount_minor: string;
+      currency: CurrencyCode;
+      membership_program_id: string | null;
+      membership_billing_period: MembershipBillingPeriod | null;
+      provider_name: string | null;
+      provider_reference: string | null;
+      provider_status: string | null;
+      created_at: Date | string;
+    }>(
+      `SELECT
+         id,
+         reference,
+         state,
+         purpose,
+         amount_minor::text AS amount_minor,
+         currency,
+         membership_program_id,
+         membership_billing_period,
+         provider_name,
+         provider_reference,
+         provider_status,
+         created_at
+       FROM payments
+       WHERE id = $1
+         AND user_id = $2
+         AND purpose = 'BUSINESS_MEMBERSHIP'
+       LIMIT 1`,
+      [paymentId, userId],
+    );
+
+    const payment = result.rows[0];
+    if (!payment) {
+      throw new NotFoundException('Membership payment not found');
+    }
+
+    return {
+      payment: {
+        id: payment.id,
+        reference: payment.reference,
+        state: payment.state,
+        purpose: payment.purpose,
+        amountMinor: Number(payment.amount_minor),
+        currency: payment.currency,
+        membershipProgramId: payment.membership_program_id,
+        billingPeriod: payment.membership_billing_period,
+        createdAt: new Date(payment.created_at).toISOString(),
+      },
+      provider: payment.provider_name
+        ? {
+            name: payment.provider_name,
+            reference: payment.provider_reference,
+            status: payment.provider_status,
+          }
+        : undefined,
+    };
+  }
   async getMarketplaceOrderPaymentStatus(userId: string, orderId: string) {
     const result = await this.db.query<{
       id: string;
@@ -669,7 +754,7 @@ if (response.status !== 'PENDING') {
         providerConfiguration: {
           id: providerRegistration.configuration.id,
           config: providerRegistration.configuration.config,
-          credentials: this.providerSecretResolver.resolve(
+          credentials: await this.providerSecretResolver.resolveAsync(
             providerRegistration.configuration.secretRef,
           ),
         },
@@ -795,11 +880,12 @@ if (response.status !== 'PENDING') {
       }
 
       if (
-        payment.payment_purpose === 'MARKETPLACE_ORDER' &&
+        (payment.payment_purpose === 'MARKETPLACE_ORDER' ||
+          payment.payment_purpose === 'BUSINESS_MEMBERSHIP') &&
         !payment.provider_configuration_id
       ) {
         throw new ServiceUnavailableException(
-          'Marketplace payment provider configuration is unavailable',
+          'Payment provider configuration is unavailable for this payment',
         );
       }
 
@@ -808,6 +894,7 @@ if (response.status !== 'PENDING') {
             payment.provider_configuration_id,
           )
         : undefined;
+
       const provider = providerRegistration?.provider ??
         await this.providers.getProvider();
       const verification = await provider.verifyWebhook({
@@ -818,8 +905,16 @@ if (response.status !== 'PENDING') {
           ? {
               providerConfiguration: {
                 id: providerRegistration.configuration.id,
-                config: providerRegistration.configuration.config,
-                credentials: this.providerSecretResolver.resolve(
+                config: {
+                  ...providerRegistration.configuration.config,
+                  resolvedWebhookSecret:
+                    typeof providerRegistration.configuration.config.webhookSecretRef === 'string'
+                      ? await this.providerSecretResolver.resolveAsync(
+                          providerRegistration.configuration.config.webhookSecretRef,
+                        )
+                      : undefined,
+                },
+                credentials: await this.providerSecretResolver.resolveAsync(
                   providerRegistration.configuration.secretRef,
                 ),
               },
@@ -883,7 +978,7 @@ if (response.status !== 'PENDING') {
           providerConfiguration: {
             id: providerRegistration.configuration.id,
             config: providerRegistration.configuration.config,
-            credentials: this.providerSecretResolver.resolve(
+            credentials: await this.providerSecretResolver.resolveAsync(
               providerRegistration.configuration.secretRef,
             ),
           },
@@ -1357,7 +1452,7 @@ if (response.status !== 'PENDING') {
           providerConfiguration: {
             id: registration.configuration.id,
             config: registration.configuration.config,
-            credentials: this.providerSecretResolver.resolve(
+            credentials: await this.providerSecretResolver.resolveAsync(
               registration.configuration.secretRef,
             ),
           },

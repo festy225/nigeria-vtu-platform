@@ -6,6 +6,7 @@ import {
 import type { PaymentProvider } from '../interfaces/payment-provider.interface';
 import { PaymentProviderAdapterResolver } from '../adapters/payment-provider-adapter.resolver';
 import { ProviderRegistryService } from '../registry/provider-registry.service';
+import { ProviderSecretResolver } from '../security/provider-secret-resolver.service';
 import type {
   ConfigurableServiceCode,
   ProviderConfigurationRecord,
@@ -31,6 +32,7 @@ export class PaymentProviderRouterService {
   constructor(
     private readonly registry: ProviderRegistryService,
     private readonly adapters: PaymentProviderAdapterResolver,
+    private readonly secrets: ProviderSecretResolver,
   ) {}
 
   async getProvider(): Promise<PaymentProvider> {
@@ -69,9 +71,13 @@ export class PaymentProviderRouterService {
     for (const registration of candidates) {
       try {
         const selected = this.toRegistration(registration);
+        await this.secrets.resolveAsync(selected.configuration.secretRef);
         if (await selected.provider.isAvailable()) return selected;
       } catch (error) {
-        if (!(error instanceof NotFoundException)) {
+        if (
+          !(error instanceof NotFoundException) &&
+          !(error instanceof ServiceUnavailableException)
+        ) {
           throw error;
         }
       }
@@ -138,10 +144,17 @@ export class PaymentProviderRouterService {
 
     for (const registration of backups) {
       try {
-        const selected = this.toRegistration(registration).provider;
+        const registrationWithAdapter = this.toRegistration(registration);
+        await this.secrets.resolveAsync(registrationWithAdapter.configuration.secretRef);
+        const selected = registrationWithAdapter.provider;
         if (await selected.isAvailable()) return selected;
       } catch (error) {
-        if (!(error instanceof NotFoundException)) throw error;
+        if (
+          !(error instanceof NotFoundException) &&
+          !(error instanceof ServiceUnavailableException)
+        ) {
+          throw error;
+        }
       }
     }
 

@@ -1,4 +1,7 @@
 import {
+  NotFoundException,
+  BadRequestException,
+  Put,
   Body,
   Controller,
   Get,
@@ -13,6 +16,8 @@ import {
 import type { Request } from 'express';
 
 import { ProviderRegistryService } from '../registry/provider-registry.service';
+import { AuditService } from '../../audit/audit.service';
+import { ProviderSecretResolver } from '../security/provider-secret-resolver.service';
 import { CreateProviderDto } from '../dto/create-provider.dto';
 import { CreateProviderConfigurationDto } from '../dto/create-provider-configuration.dto';
 import { UpdateProviderConfigurationDto } from '../dto/update-provider-configuration.dto';
@@ -69,7 +74,11 @@ export function redactProviderConfiguration(value: unknown): unknown {
 @UseGuards(RolesGuard)
 @Roles('ADMIN', 'SUPER_ADMIN')
 export class ProviderManagementController {
-  constructor(private readonly providerRegistry: ProviderRegistryService) {}
+  constructor(
+    private readonly providerRegistry: ProviderRegistryService,
+    private readonly providerSecretResolver: ProviderSecretResolver,
+    private readonly auditService: AuditService,
+  ) {}
 
   @Post()
   async create(@Body() dto: CreateProviderDto) {
@@ -126,6 +135,7 @@ export class ProviderManagementController {
       success: true,
       data: providers.map((provider) => ({
         id: provider.id,
+        adapterKey: provider.adapterKey,
         name: provider.name,
         status: provider.status,
         baseUrl: redactProviderConfiguration(provider.baseUrl) as string | null,
@@ -217,4 +227,115 @@ export class ProviderManagementController {
       data: health,
     };
   }
-}
+
+  @Get(':providerId/secrets/status')
+  @Roles('SUPER_ADMIN')
+  async getCredentialStatus(
+    @Param('providerId', new ParseUUIDPipe()) providerId: string,
+  ) {
+    const provider = await this.providerRegistry.findProviderById(providerId);
+
+    if (!provider) {
+      throw new NotFoundException('Provider not found');
+    }
+    if (provider.adapterKey !== 'FLUTTERWAVE') {
+      throw new BadRequestException('Credential vault endpoint is only available for Flutterwave');
+    }
+
+    const status = await this.providerSecretResolver.getSecretStatus(providerId);
+
+    return {
+      success: true,
+      data: {
+        hasApiSecret: status.apiSecretConfigured,
+        hasWebhookSecret: status.webhookSecretConfigured,
+      },
+    };
+  }
+
+  @Put(':providerId/secrets')
+  @Roles('SUPER_ADMIN')
+  async updateCredentials(
+    @Param('providerId', new ParseUUIDPipe()) providerId: string,
+    @Body() body: { apiSecret?: unknown; webhookSecret?: unknown },
+    @Req() request: Request & { user?: AuthenticatedUser },
+  ) {
+    const user = request.user;
+    if (!user) throw new UnauthorizedException('Authentication required');
+
+    const provider = await this.providerRegistry.findProviderById(providerId);
+
+    if (!provider) {
+      throw new NotFoundException('Provider not found');
+    }
+    if (provider.adapterKey !== 'FLUTTERWAVE') {
+      throw new BadRequestException('Credential vault endpoint is only available for Flutterwave');
+    }
+
+    const apiSecret = body?.apiSecret;
+    const webhookSecret = body?.webhookSecret;
+
+    if (
+      (apiSecret !== undefined && typeof apiSecret !== 'string') ||
+      (webhookSecret !== undefined && typeof webhookSecret !== 'string')
+    ) {
+      throw new BadRequestException('Credential values must be text');
+    }
+
+    const apiValue = typeof apiSecret === 'string' ? apiSecret.trim() : '';
+    const webhookValue =
+      typeof webhookSecret === 'string' ? webhookSecret.trim() : '';
+
+    if (!apiValue && !webhookValue) {
+      throw new BadRequestException('Enter at least one credential to update');
+    }
+
+    const before = await this.providerSecretResolver.getSecretStatus(providerId);
+    const updatedFields: string[] = [];
+
+    if (apiValue) {
+      await this.providerSecretResolver.saveSecret(
+        providerId,
+        'api_secret',
+        apiValue,
+        user.id,
+      );
+      updatedFields.push('api_secret');
+    }
+
+    if (webhookValue) {
+      await this.providerSecretResolver.saveSecret(
+        providerId,
+        'webhook_secret',
+        webhookValue,
+        user.id,
+      );
+      updatedFields.push('webhook_secret');
+    }
+
+    const after = await this.providerSecretResolver.getSecretStatus(providerId);
+    const userAgent = request.headers['user-agent'];
+
+    await this.auditService.record({
+      actorId: user.id,
+      action: 'PROVIDER_CREDENTIALS_UPDATED',
+      resourceType: 'API_PROVIDER',
+      resourceId: providerId,
+      beforeData: before,
+      afterData: {
+        ...after,
+        updatedFields,
+      },
+      ipAddress: request.ip,
+      userAgent: typeof userAgent === 'string' ? userAgent : undefined,
+    });
+
+    return {
+      success: true,
+      message: 'Flutterwave credentials saved securely',
+      data: {
+        hasApiSecret: after.apiSecretConfigured,
+        hasWebhookSecret: after.webhookSecretConfigured,
+      },
+    };
+  }}

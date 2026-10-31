@@ -14,12 +14,12 @@ import {
 } from '@/lib/api';
 
 const pageClass =
-  'min-h-screen bg-[#F5F7FB] text-[#334155] [font-family:var(--font-sora),Arial,sans-serif]';
-const panelClass = 'rounded-3xl border border-[#E8EEF6] bg-white p-6 shadow-sm';
+  'min-h-screen bg-white text-[#334155] [font-family:var(--font-sora),Arial,sans-serif]';
+const panelClass = 'rounded-xl border border-[#E8EEF6] bg-white p-5 text-[#334155] shadow-sm';
 const actionClass =
   'inline-flex min-h-11 items-center justify-center rounded-xl bg-[#00D4A3] px-5 py-2.5 text-sm font-bold text-[#08205B] transition hover:bg-[#63f0cf] disabled:cursor-not-allowed disabled:opacity-50';
 const mutedActionClass =
-  'inline-flex min-h-10 items-center justify-center rounded-xl border border-white/20 px-4 py-2 text-sm font-semibold text-[#E8EEF6] transition hover:border-[#00D4A3] hover:text-[#00D4A3] disabled:cursor-not-allowed disabled:opacity-50';
+  'inline-flex min-h-10 items-center justify-center rounded-lg border border-[#CBD5E1] px-4 py-2 text-sm font-semibold text-[#08205B] transition hover:border-[#00D4A3] hover:text-[#08205B] disabled:cursor-not-allowed disabled:opacity-50';
 
 function formatMoney(minor: number, currency: string): string {
   const formatter = new Intl.NumberFormat(undefined, {
@@ -50,20 +50,70 @@ function errorMessage(error: unknown): string {
 function PageFrame({ children }: { children: React.ReactNode }) {
   return (
     <main className={pageClass}>
-      <header className="border-b border-[#E8EEF6] bg-white shadow-sm">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-5 sm:px-8">
-          <Link href="/marketplace" className="flex items-center gap-3" aria-label="CHIMZO marketplace home">
-            <span className="grid h-10 w-10 place-items-center rounded-2xl bg-[#00D4A3] text-lg font-black text-[#08205B]">C</span>
+      <header className="sticky top-0 z-40 border-b border-white/10 bg-[#08205B] text-white shadow-md">
+        <div className="mx-auto flex min-h-[62px] max-w-[1500px] items-center gap-5 px-4 sm:px-6 lg:px-8">
+          <Link
+            href="/marketplace"
+            className="flex shrink-0 items-center gap-2"
+            aria-label="CHIMZO marketplace home"
+          >
+            <span className="grid h-8 w-8 place-items-center rounded-full bg-[#00D4A3] text-lg font-black text-[#08205B]">
+              C
+            </span>
             <span className="text-lg font-extrabold tracking-tight text-white">CHIMZO</span>
           </Link>
-          <nav className="flex items-center gap-3 sm:gap-6" aria-label="Marketplace">
-            <Link href="/marketplace" className="text-sm font-semibold text-[#E8EEF6] hover:text-[#00D4A3]">Discover</Link>
-            <Link href="/marketplace/orders" className="text-sm font-semibold text-[#08205B] hover:text-[#00D4A3]">My Orders</Link>
-            <Link href="/marketplace/cart" className="rounded-full border border-white/20 px-4 py-2 text-sm font-semibold text-white hover:border-[#00D4A3] hover:text-[#00D4A3]">Cart</Link>
+
+          <nav className="hidden items-center gap-4 text-xs font-semibold text-white/90 lg:flex" aria-label="Main navigation">
+            <Link href="/marketplace" className="transition hover:text-[#00D4A3]">Marketplace</Link>
+            <Link href="/marketplace" className="transition hover:text-[#00D4A3]">Services</Link>
+            <Link href="/marketplace" className="transition hover:text-[#00D4A3]">VTU</Link>
+            <Link href="/marketplace#categories" className="transition hover:text-[#00D4A3]">Categories</Link>
           </nav>
+
+          <form action="/marketplace" method="get" className="ml-auto hidden min-w-0 max-w-xl flex-1 sm:flex">
+            <label htmlFor="chimzo-marketplace-search" className="sr-only">Search products</label>
+            <input
+              id="chimzo-marketplace-search"
+              name="q"
+              type="search"
+              placeholder="Search for products, brands and more..."
+              className="min-h-9 w-full rounded-l-md border-0 bg-white px-3 text-xs text-[#08205B] outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-[#00D4A3]"
+            />
+            <button type="submit" aria-label="Search" className="rounded-r-md bg-white px-3 text-[#08205B] hover:bg-slate-100">
+              Search
+            </button>
+          </form>
+
+          <div className="ml-auto flex shrink-0 items-center gap-3 text-xs font-semibold sm:ml-0 sm:gap-4">
+            <Link href="/marketplace/cart" aria-label="Shopping cart" className="text-base transition hover:text-[#00D4A3]">
+              Cart
+            </Link>
+            <Link href="/login" className="whitespace-nowrap transition hover:text-[#00D4A3]">
+              Login / Register
+            </Link>
+          </div>
+        </div>
+
+        <div className="px-4 pb-3 sm:hidden">
+          <form action="/marketplace" method="get" className="flex">
+            <label htmlFor="chimzo-marketplace-search-mobile" className="sr-only">Search products</label>
+            <input
+              id="chimzo-marketplace-search-mobile"
+              name="q"
+              type="search"
+              placeholder="Search products and brands..."
+              className="min-h-9 w-full rounded-l-md bg-white px-3 text-xs text-[#08205B] outline-none placeholder:text-slate-400"
+            />
+            <button type="submit" className="rounded-r-md bg-white px-3 text-xs font-semibold text-[#08205B]">
+              Search
+            </button>
+          </form>
         </div>
       </header>
-      <div className="mx-auto max-w-7xl px-5 py-10 sm:px-8 sm:py-14">{children}</div>
+
+      <div className="mx-auto max-w-[1500px] px-4 py-7 sm:px-6 sm:py-9 lg:px-8">
+        {children}
+      </div>
     </main>
   );
 }
@@ -71,7 +121,7 @@ function PageFrame({ children }: { children: React.ReactNode }) {
 function ErrorPanel({ message, retry }: { message: string; retry?: () => void }) {
   return (
     <div role="alert" className={`${panelClass} border-amber-300/30`}>
-      <p className="text-lg font-bold text-white">{message}</p>
+      <p className="text-lg font-bold text-[#08205B]">{message}</p>
       {retry && <button type="button" onClick={retry} className={`${mutedActionClass} mt-5`}>Try again</button>}
     </div>
   );
@@ -100,43 +150,112 @@ export function MarketplaceCatalog() {
 
   return (
     <PageFrame>
-      <section className="mb-10 max-w-3xl">
-        <p className="mb-3 text-xs font-bold uppercase tracking-[0.2em] text-[#00D4A3]">CHIMZO marketplace</p>
-        <h1 className="text-4xl font-extrabold leading-tight text-white sm:text-5xl">Discover products made for you.</h1>
-        <p className="mt-4 max-w-2xl text-base leading-7 text-[#E8EEF6]/75">Browse seller listings and explore each product’s configured options.</p>
+      <section className="relative mb-8 overflow-hidden rounded-2xl bg-[#08205B] px-6 py-10 text-white sm:px-10 sm:py-14 lg:px-14">
+        <div className="pointer-events-none absolute -right-12 -top-16 h-56 w-56 rounded-full bg-[#00D4A3]/20 blur-3xl" />
+        <div className="relative max-w-2xl">
+          <p className="mb-3 text-xs font-bold uppercase tracking-[0.2em] text-[#00D4A3]">Welcome to CHIMZO</p>
+          <h1 className="text-3xl font-extrabold leading-tight sm:text-4xl lg:text-5xl">Discover products made for you.</h1>
+          <p className="mt-4 max-w-xl text-sm leading-6 text-white/80 sm:text-base">Explore marketplace listings, compare available options and find products from sellers in one convenient place.</p>
+          <div className="mt-7 flex flex-wrap gap-3">
+            <a href="#products" className="inline-flex min-h-11 items-center justify-center rounded-lg bg-[#00D4A3] px-5 py-3 text-sm font-bold text-[#08205B] transition hover:bg-white">Shop products <span className="ml-2" aria-hidden="true">?</span></a>
+            <a href="/dashboard/business/seller" className="inline-flex min-h-11 items-center justify-center rounded-lg border border-white/50 px-5 py-3 text-sm font-bold text-white transition hover:bg-white/10">Sell on CHIMZO</a>
+          </div>
+        </div>
       </section>
+      <section aria-labelledby="categories-heading" className="mb-10">
+        <div className="mb-4 flex items-end justify-between gap-3">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#087F70]">Browse the store</p>
+            <h2 id="categories-heading" className="mt-1 text-xl font-extrabold text-[#08205B] sm:text-2xl">Shop by category</h2>
+          </div>
+          <a href="#products" className="text-sm font-bold text-[#087F70] hover:text-[#08205B]">View products ?</a>
+        </div>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <a href="#products" className="group rounded-xl border border-[#E8EEF6] bg-white p-4 transition hover:border-[#00D4A3] hover:shadow-sm sm:p-5">
+            <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#E8F8F4] text-xl" aria-hidden="true">?</span>
+            <span className="mt-3 block text-sm font-bold text-[#08205B]">Electronics</span>
+            <span className="mt-1 block text-xs text-[#64748B]">Explore listings</span>
+          </a>
+          <a href="#products" className="group rounded-xl border border-[#E8EEF6] bg-white p-4 transition hover:border-[#00D4A3] hover:shadow-sm sm:p-5">
+            <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#EAF1FF] text-xl" aria-hidden="true">?</span>
+            <span className="mt-3 block text-sm font-bold text-[#08205B]">Fashion</span>
+            <span className="mt-1 block text-xs text-[#64748B]">Explore listings</span>
+          </a>
+          <a href="#products" className="group rounded-xl border border-[#E8EEF6] bg-white p-4 transition hover:border-[#00D4A3] hover:shadow-sm sm:p-5">
+            <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#FFF3E8] text-xl" aria-hidden="true">?</span>
+            <span className="mt-3 block text-sm font-bold text-[#08205B]">Home & living</span>
+            <span className="mt-1 block text-xs text-[#64748B]">Explore listings</span>
+          </a>
+          <a href="#products" className="group rounded-xl border border-[#E8EEF6] bg-white p-4 transition hover:border-[#00D4A3] hover:shadow-sm sm:p-5">
+            <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#F3EDFF] text-xl" aria-hidden="true">?</span>
+            <span className="mt-3 block text-sm font-bold text-[#08205B]">More to explore</span>
+            <span className="mt-1 block text-xs text-[#64748B]">Browse all listings</span>
+          </a>
+        </div>
+      </section>
+
+      <section aria-label="CHIMZO marketplace promotion" className="mb-10 flex flex-col justify-between gap-5 rounded-2xl border border-[#D8F3EC] bg-[#F0FBF8] p-6 sm:flex-row sm:items-center sm:p-8">
+        <div className="max-w-2xl">
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#087F70]">Your marketplace, all in one place</p>
+          <h2 className="mt-2 text-xl font-extrabold text-[#08205B] sm:text-2xl">Find something you?ll love.</h2>
+          <p className="mt-2 text-sm leading-6 text-[#475569]">Browse available listings and open a product to see its details, pricing and options.</p>
+        </div>
+        <a href="#products" className="inline-flex min-h-11 shrink-0 items-center justify-center rounded-lg bg-[#08205B] px-5 py-3 text-sm font-bold text-white transition hover:bg-[#12377E]">Explore listings ?</a>
+      </section>
+
+      <section aria-labelledby="featured-products-heading" className="mb-5">
+        <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#087F70]">Handpicked for browsing</p>
+        <h2 id="featured-products-heading" className="mt-1 text-xl font-extrabold text-[#08205B] sm:text-2xl">Explore products</h2>
+        <p className="mt-2 text-sm text-[#64748B]">Browse available listings and view each product for more information.</p>
+      </section>
+
       {loading ? (
-        <p className="text-sm text-[#E8EEF6]/70" role="status">Loading products…</p>
+        <p className="text-sm text-[#475569]" role="status">Loading products…</p>
       ) : error ? (
         <ErrorPanel message={error} retry={() => void loadProducts()} />
       ) : products.length === 0 ? (
-        <div className={panelClass}><h2 className="text-xl font-bold text-white">No products available yet</h2><p className="mt-2 text-sm text-[#E8EEF6]/70">Please check back later.</p></div>
+        <div className={panelClass}><h2 className="text-xl font-bold text-[#08205B]">No products available yet</h2><p className="mt-2 text-sm text-[#475569]">Please check back later.</p></div>
       ) : (
-        <section className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3" aria-label="Marketplace products">
+        <section id="products" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" aria-label="Marketplace products">
           {products.map((product) => (
-            <article key={product.id} className="overflow-hidden rounded-3xl border border-white/10 bg-white/[0.06]">
-              <div className="flex h-40 items-end bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-[#2F80ED]/50 via-[#08205B] to-[#08205B] p-5">
-                <span className="rounded-full border border-white/20 bg-[#08205B]/60 px-3 py-1 text-xs font-semibold text-[#E8EEF6]">{product.categoryName}</span>
+            <article key={product.id} className="overflow-hidden rounded-xl border border-[#E8EEF6] bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+              <div className="relative flex h-48 items-end overflow-hidden bg-[#F5F7FB] p-4">
+                {product.imageUrl && <img src={product.imageUrl} alt={product.name} loading="lazy" className="pointer-events-none absolute inset-0 h-full w-full object-contain p-4" onError={(event) => { event.currentTarget.style.display = "none"; }} />}
+                <span className="rounded-full border border-[#E8EEF6] bg-white px-3 py-1 text-xs font-semibold text-[#334155]">{product.categoryName}</span>
               </div>
               <div className="p-5">
-                <p className="text-xs font-semibold uppercase tracking-wide text-[#00D4A3]">{product.sellerName}</p>
-                <h2 className="mt-2 text-xl font-bold text-white">{product.name}</h2>
-                <p className="mt-2 line-clamp-2 min-h-10 text-sm leading-5 text-[#E8EEF6]/70">{product.description}</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-[#087F70]">{product.sellerName}</p>
+                <h2 className="mt-2 line-clamp-2 text-base font-bold text-[#08205B]">{product.name}</h2>
+                <p className="mt-2 line-clamp-2 min-h-10 text-sm leading-5 text-[#64748B]">{product.description}</p>
                 <div className="mt-5 flex min-h-11 items-center justify-between gap-3">
-                  <p className="font-bold text-white">
+                  <p className="font-bold text-[#08205B]">
                     {product.hasVariants
                       ? 'Options available'
                       : product.priceMinor !== null && product.currency
                         ? formatMoney(product.priceMinor, product.currency)
                         : 'Price unavailable'}
                   </p>
-                  <Link href={`/marketplace/products/${encodeURIComponent(product.id)}`} className="text-sm font-bold text-[#00D4A3] hover:text-white">View details →</Link>
+                  <Link href={`/marketplace/products/${encodeURIComponent(product.id)}`} className="text-sm font-bold text-[#087F70] hover:text-[#08205B]">View details →</Link>
                 </div>
               </div>
             </article>
           ))}
         </section>
       )}
+      <footer className="mt-14 border-t border-[#E8EEF6] pt-7 pb-3">
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <a href="/marketplace" className="text-lg font-extrabold tracking-tight text-[#08205B]">CHIMZO<span className="text-[#00A98A]">.</span></a>
+            <p className="mt-1 max-w-sm text-sm leading-6 text-[#64748B]">Discover products and explore marketplace listings in one place.</p>
+          </div>
+          <nav aria-label="Marketplace footer" className="flex flex-wrap gap-x-5 gap-y-3 text-sm font-semibold text-[#475569]">
+            <a href="/marketplace" className="hover:text-[#087F70]">Marketplace</a>
+            <a href="#categories-heading" className="hover:text-[#087F70]">Categories</a>
+            <a href="#products" className="hover:text-[#087F70]">Products</a>
+          </nav>
+        </div>
+        <p className="mt-6 border-t border-[#E8EEF6] pt-4 text-xs text-[#64748B]">Product availability and pricing are shown on individual listings.</p>
+      </footer>
     </PageFrame>
   );
 }
@@ -193,41 +312,42 @@ export function MarketplaceProductDetail({ productId }: { productId: string }) {
 
   return (
     <PageFrame>
-      <p className="mb-6 text-sm text-[#E8EEF6]/60"><Link href="/marketplace" className="hover:text-[#00D4A3]">Discover</Link><span className="px-2">/</span>Product details</p>
+      <p className="mb-6 text-sm text-[#64748B]"><Link href="/marketplace" className="hover:text-[#00D4A3]">Discover</Link><span className="px-2">/</span>Product details</p>
       {loading ? (
         <p className="text-sm text-[#E8EEF6]/70" role="status">Loading product…</p>
       ) : error && !product ? (
         <ErrorPanel message={error} retry={() => void loadProduct()} />
       ) : product ? (
         <div className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr]">
-          <div className="flex min-h-72 items-end rounded-3xl border border-white/10 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-[#2F80ED]/50 via-[#08205B] to-[#08205B] p-7">
-            <span className="rounded-full border border-white/20 bg-[#08205B]/70 px-4 py-2 text-sm font-semibold text-white">{product.categoryName}</span>
+          <div className="relative flex min-h-72 items-end overflow-hidden rounded-xl border border-[#E8EEF6] bg-[#F5F7FB] p-7">
+            {product.imageUrl && <img src={product.imageUrl} alt={product.name} className="pointer-events-none absolute inset-0 h-full w-full object-cover" onError={(event) => { event.currentTarget.style.display = "none"; }} />}
+            <span className="rounded-full border border-[#E8EEF6] bg-white px-4 py-2 text-sm font-semibold text-[#334155]">{product.categoryName}</span>
           </div>
           <section className={panelClass}>
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#00D4A3]">{product.sellerName}</p>
             <h1 className="mt-3 text-3xl font-extrabold text-white">{product.name}</h1>
-            <p className="mt-4 whitespace-pre-wrap text-sm leading-7 text-[#E8EEF6]/75">{product.description}</p>
-            <p className="mt-6 text-2xl font-extrabold text-white">
+            <p className="mt-4 whitespace-pre-wrap text-sm leading-7 text-[#475569]">{product.description}</p>
+            <p className="mt-6 text-2xl font-extrabold text-[#08205B]">
               {pricingAvailable ? formatMoney(priceMinor, currency) : 'Price unavailable'}
             </p>
 
             {product.hasVariants && (
               <fieldset className="mt-7">
-                <legend className="mb-3 text-sm font-bold text-white">Choose an available option</legend>
+                <legend className="mb-3 text-sm font-bold text-[#08205B]">Choose an available option</legend>
                 {product.variants.length ? (
                   <div className="space-y-2">
                     {product.variants.map((variant) => (
-                      <label key={variant.id} className={`flex cursor-pointer items-start gap-3 rounded-2xl border p-4 transition ${selectedVariantId === variant.id ? 'border-[#00D4A3] bg-[#00D4A3]/10' : 'border-white/15 hover:border-white/35'}`}>
+                      <label key={variant.id} className={`flex cursor-pointer items-start gap-3 rounded-2xl border p-4 transition ${selectedVariantId === variant.id ? 'border-[#00D4A3] bg-[#00D4A3]/10' : 'border-[#E8EEF6] hover:border-[#94A3B8]'}`}>
                         <input type="radio" name="marketplace-variant" value={variant.id} checked={selectedVariantId === variant.id} onChange={() => { setSelectedVariantId(variant.id); setNotice(null); }} className="mt-1 accent-[#00D4A3]" />
                         <span className="min-w-0 flex-1">
-                          <span className="block font-semibold text-white">
+                          <span className="block font-semibold text-[#08205B]">
                             {variant.attributeValues.length
                               ? variant.attributeValues.map((selection) => `${selection.attributeName}: ${selection.value}`).join(' · ')
                               : 'Available variant'}
                           </span>
-                          <span className="mt-1 block text-xs text-[#E8EEF6]/55">SKU {variant.sku}</span>
+                          <span className="mt-1 block text-xs text-[#64748B]">SKU {variant.sku}</span>
                         </span>
-                        <span className="text-sm font-bold text-white">{formatMoney(variant.priceMinor, variant.currency)}</span>
+                        <span className="text-sm font-bold text-[#08205B]">{formatMoney(variant.priceMinor, variant.currency)}</span>
                       </label>
                     ))}
                   </div>
@@ -238,7 +358,7 @@ export function MarketplaceProductDetail({ productId }: { productId: string }) {
             )}
 
             <label htmlFor="product-quantity" className="mt-6 block text-sm font-semibold text-white">Quantity</label>
-            <input id="product-quantity" type="number" min={1} max={2147483647} step={1} value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} className="mt-2 min-h-11 w-28 rounded-xl border border-white/20 bg-[#08205B] px-3 text-white outline-none focus:border-[#00D4A3]" />
+            <input id="product-quantity" type="number" min={1} max={2147483647} step={1} value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} className="mt-2 min-h-11 w-28 rounded-lg border border-[#CBD5E1] bg-white px-3 text-[#08205B] outline-none focus:border-[#00D4A3]" />
             {error && <p role="alert" className="mt-4 text-sm text-rose-200">{error}</p>}
             {notice && <p role="status" className="mt-4 text-sm font-semibold text-[#00D4A3]">{notice} <Link href="/marketplace/cart" className="underline">View cart</Link></p>}
             <div className="mt-6">

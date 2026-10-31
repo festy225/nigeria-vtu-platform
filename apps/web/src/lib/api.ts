@@ -94,6 +94,51 @@ export interface SellerApplication {
   created_at: string;
   updated_at: string;
 }
+export interface SellerMembershipProgram {
+  id: string;
+  programCode?: string;
+  program_code?: string;
+  displayName?: string;
+  display_name?: string;
+  description?: string | null;
+  monthlyPriceMinor?: number | string;
+  monthly_price_minor?: number | string;
+  annualPriceMinor?: number | string;
+  annual_price_minor?: number | string;
+  currency: string;
+  termsVersion?: string;
+  terms_version?: string;
+}
+
+export interface SellerMembershipPaymentIntent {
+  payment: {
+    id: string;
+    reference: string;
+    state: string;
+    purpose?: string;
+    amountMinor: number;
+    currency: string;
+    membershipProgramId?: string;
+    billingPeriod?: string;
+  };
+  provider?: { name?: string; reference?: string; status?: string };
+  checkout?: { url?: string };
+}
+
+export interface SellerMembershipPaymentStatus {
+  payment: {
+    id: string;
+    reference: string;
+    state: string;
+    purpose?: string;
+    amountMinor: number;
+    currency: string;
+    membershipProgramId?: string | null;
+    billingPeriod?: string | null;
+    createdAt?: string;
+  };
+  provider?: { name?: string; reference?: string; status?: string };
+}
 export interface SellerFulfillment {
   id: string;
   order_id: string;
@@ -206,11 +251,37 @@ export interface MarketplaceProduct {
   sellerName: string;
   name: string;
   description: string;
+  imageUrl: string | null;
   hasVariants: boolean;
   priceMinor: number | null;
   currency: CurrencyCode | null;
 }
 
+export interface SellerProduct {
+  id: string;
+  seller_id: string;
+  category_id: string;
+  name: string;
+  description: string;
+  image_url: string | null;
+  price_minor: string | number | null;
+  currency: CurrencyCode | null;
+  status: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+export interface SellerProductMedia {
+  id: string;
+  productId: string;
+  mediaType: 'IMAGE' | 'VIDEO';
+  mimeType: string;
+  fileSize: number | string;
+  displayOrder: number;
+  altText: string | null;
+  createdAt: string;
+  url: string;
+}
 export interface MarketplaceProductDetail extends MarketplaceProduct {
   variants: MarketplaceCatalogVariant[];
 }
@@ -311,8 +382,19 @@ export interface AdminUserList {
   total: number;
   totalPages: number;
 }
+export interface AdminProviderSecretStatus {
+  hasApiSecret: boolean;
+  hasWebhookSecret: boolean;
+}
+
+export interface UpdateAdminProviderSecretsPayload {
+  apiSecret?: string;
+  webhookSecret?: string;
+}
+
 export interface AdminProviderRecord {
   id: string;
+  adapterKey: string | null;
   name: string;
   status: string;
   baseUrl: string | null;
@@ -329,6 +411,7 @@ export interface AdminProviderConfiguration {
   isPrimary: boolean;
   isBackup: boolean;
   enabled: boolean;
+  secretRef: string;
   config: Record<string, unknown>;
   updatedAt: string;
 }
@@ -383,7 +466,7 @@ export async function fetchJson<T>(path: string, init: RequestInit = {}): Promis
     credentials: 'include',
     headers: {
       Accept: 'application/json',
-      'Content-Type': 'application/json',
+      ...(init.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
       ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       ...(init.headers ?? {})
     }
@@ -499,6 +582,24 @@ passwordResetConfirm: (token: string, password: string) =>
     if (params.search?.trim()) query.set("search", params.search.trim());
     return authenticatedFetch<AdminUserList>("/users?" + query.toString());
   },
+  getAdminProviderSecretStatus: (providerId: string) =>
+    authenticatedFetch<AdminProviderSecretStatus>(
+      "/admin/providers/" + encodeURIComponent(providerId) + "/secrets/status",
+      { cache: "no-store" },
+    ),
+
+  updateAdminProviderSecrets: (
+    providerId: string,
+    payload: UpdateAdminProviderSecretsPayload,
+  ) =>
+    authenticatedFetch<AdminProviderSecretStatus>(
+      "/admin/providers/" + encodeURIComponent(providerId) + "/secrets",
+      {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      },
+    ),
+
   getAdminProviders: () =>
     authenticatedFetch<AdminProviderRecord[]>("/admin/providers"),
 
@@ -542,6 +643,7 @@ passwordResetConfirm: (token: string, password: string) =>
       isPrimary: boolean;
       isBackup: boolean;
       enabled: boolean;
+      secretRef: string;
       config?: Record<string, unknown>;
     },
   ) =>
@@ -572,6 +674,28 @@ passwordResetConfirm: (token: string, password: string) =>
 
   getSellerOrders: () =>
     authenticatedFetch<SellerOrder[]>('/sellers/orders'),
+  getSellerProducts: () =>
+    authenticatedFetch<SellerProduct[]>('/sellers/products'),
+
+  getSellerProductMedia: (productId: string) =>
+    authenticatedFetch<SellerProductMedia[]>(
+      `/sellers/products/${encodeURIComponent(productId)}/media`,
+    ),
+
+  uploadSellerProductMedia: (productId: string, files: File[]) => {
+    const form = new FormData();
+    files.forEach((file) => form.append('files', file));
+    return authenticatedFetch<SellerProductMedia[]>(
+      `/sellers/products/${encodeURIComponent(productId)}/media`,
+      { method: 'POST', body: form },
+    );
+  },
+
+  deleteSellerProductMedia: (productId: string, mediaId: string) =>
+    authenticatedFetch<{ deleted: boolean; id: string }>(
+      `/sellers/products/${encodeURIComponent(productId)}/media/${encodeURIComponent(mediaId)}`,
+      { method: 'DELETE' },
+    ),
 
   getSellerOrder: (orderId: string) =>
     authenticatedFetch<SellerOrderDetail>(
@@ -627,6 +751,29 @@ passwordResetConfirm: (token: string, password: string) =>
       `/marketplace/products/${encodeURIComponent(productId)}`,
     ),
 
+  getSellerMembershipPrograms: () =>
+    authenticatedFetch<SellerMembershipProgram[]>('/membership/programs'),
+
+  acceptSellerMembershipTerms: (membershipProgramId: string) =>
+    authenticatedFetch<unknown>('/membership/terms-acceptances', {
+      method: 'POST',
+      body: JSON.stringify({ membershipProgramId }),
+    }),
+
+  createSellerMembershipPayment: (payload: {
+    membershipProgramId: string;
+    billingPeriod: 'MONTHLY' | 'ANNUAL';
+    idempotencyKey: string;
+  }) =>
+    authenticatedFetch<SellerMembershipPaymentIntent>('/payments/membership', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  getSellerMembershipPaymentStatus: (paymentId: string) =>
+    authenticatedFetch<SellerMembershipPaymentStatus>(
+      `/payments/membership/${encodeURIComponent(paymentId)}/status`,
+    ),
   marketplaceCart: () =>
     authenticatedFetch<MarketplaceCart>('/marketplace/cart'),
 

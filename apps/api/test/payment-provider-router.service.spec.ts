@@ -4,19 +4,28 @@ import { resolve } from 'node:path';
 import { PaymentProviderAdapterResolver } from '../src/modules/providers/adapters/payment-provider-adapter.resolver';
 import { MockPaymentProviderAdapter } from '../src/modules/providers/adapters/mock-payment-provider.adapter';
 import { PaystackPaymentProviderAdapter } from '../src/modules/providers/adapters/paystack-payment-provider.adapter';
+import { FlutterwavePaymentProviderAdapter } from '../src/modules/providers/adapters/flutterwave-payment-provider.adapter';
 import { PaymentProviderRouterService } from '../src/modules/providers/routing/payment-provider-router.service';
 import type { ProviderRegistrationRecord } from '../src/modules/providers/registry/provider-registry.types';
 
 describe('PaymentProviderRouterService', () => {
   const adapter = new MockPaymentProviderAdapter();
-  const adapterResolver = new PaymentProviderAdapterResolver(adapter, new PaystackPaymentProviderAdapter());
+  const adapterResolver = new PaymentProviderAdapterResolver(
+    adapter,
+    new PaystackPaymentProviderAdapter(),
+    new FlutterwavePaymentProviderAdapter(),
+  );
   const registry = {
     findEnabledServiceId: jest.fn(),
     findRegistrations: jest.fn(),
   };
+  const secrets = {
+    resolve: jest.fn().mockReturnValue('test-provider-secret'),
+  };
   const router = new PaymentProviderRouterService(
     registry as never,
     adapterResolver,
+    secrets as never,
   );
 
   const registration = (
@@ -61,6 +70,7 @@ describe('PaymentProviderRouterService', () => {
     jest.clearAllMocks();
     registry.findEnabledServiceId.mockResolvedValue(null);
     registry.findRegistrations.mockResolvedValue([]);
+    secrets.resolve.mockReturnValue('test-provider-secret');
   });
 
   it('allows the mock adapter in development', async () => {
@@ -188,6 +198,36 @@ describe('PaymentProviderRouterService', () => {
     expect(selected.serviceId).toBe('ecommerce-service-id');
   });
 
+  it('rejects provider selection when configured credentials cannot be resolved', async () => {
+    secrets.resolve.mockImplementationOnce(() => {
+      throw new ServiceUnavailableException(
+        'Provider credentials are not configured',
+      );
+    });
+    registry.findRegistrations.mockResolvedValue([
+      registration({ serviceId: null }),
+    ]);
+
+    await expect(router.getProviderRegistration()).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+    expect(secrets.resolve).toHaveBeenCalledWith(
+      'configured-secret-reference',
+    );
+  });
+
+  it('selects a ready provider when its configured credentials resolve', async () => {
+    registry.findRegistrations.mockResolvedValue([
+      registration({ serviceId: null }),
+    ]);
+
+    const selected = await router.getProviderRegistration();
+
+    expect(selected.provider).toBe(adapter);
+    expect(secrets.resolve).toHaveBeenCalledWith(
+      'configured-secret-reference',
+    );
+  });
   it('does not select disabled configurations or inactive providers', async () => {
     registry.findRegistrations.mockResolvedValue([
       registration({ enabled: false }),
