@@ -64,6 +64,8 @@ export type SellerType =
   | 'WHOLESALER'
   | 'DISTRIBUTOR';
 
+export type SellerApplicationType = Extract<SellerType, 'RETAILER' | 'VENDOR'>;
+
 export interface SellerApplication {
   id: string;
   user_id: string;
@@ -108,6 +110,8 @@ export interface SellerMembershipProgram {
   currency: string;
   termsVersion?: string;
   terms_version?: string;
+  termsAndConditions?: string | null;
+  terms_and_conditions?: string | null;
 }
 
 export interface SellerMembershipPaymentIntent {
@@ -656,7 +660,7 @@ passwordResetConfirm: (token: string, password: string) =>
     ),
 
   createSellerApplication: (payload: {
-    sellerType: SellerType;
+    sellerType: SellerApplicationType;
     businessName: string;
     storeName: string;
     storeSlug?: string;
@@ -754,6 +758,11 @@ passwordResetConfirm: (token: string, password: string) =>
   getSellerMembershipPrograms: () =>
     authenticatedFetch<SellerMembershipProgram[]>('/membership/programs'),
 
+  getSellerApplicationEligibility: () =>
+    authenticatedFetch<{ eligible: boolean }>(
+      '/sellers/application/eligibility',
+    ),
+
   acceptSellerMembershipTerms: (membershipProgramId: string) =>
     authenticatedFetch<unknown>('/membership/terms-acceptances', {
       method: 'POST',
@@ -773,6 +782,21 @@ passwordResetConfirm: (token: string, password: string) =>
   getSellerMembershipPaymentStatus: (paymentId: string) =>
     authenticatedFetch<SellerMembershipPaymentStatus>(
       `/payments/membership/${encodeURIComponent(paymentId)}/status`,
+    ),
+  activateWholesalerUpgrade: () =>
+    authenticatedFetch<{ active: boolean; sellerType: 'WHOLESALER' | 'DISTRIBUTOR' }>(
+      '/sellers/upgrade/wholesaler/activate',
+      { method: 'POST', body: JSON.stringify({}) },
+    ),
+  activateDistributorUpgrade: () =>
+    authenticatedFetch<{ active: boolean; sellerType: 'DISTRIBUTOR' }>(
+      '/sellers/upgrade/distributor/activate',
+      { method: 'POST', body: JSON.stringify({}) },
+    ),
+  activateSellerMembership: () =>
+    authenticatedFetch<{ active: boolean; sellerType: 'SELLER' }>(
+      '/sellers/membership/seller/activate',
+      { method: 'POST', body: JSON.stringify({}) },
     ),
   marketplaceCart: () =>
     authenticatedFetch<MarketplaceCart>('/marketplace/cart'),

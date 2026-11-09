@@ -60,6 +60,7 @@ function ProviderAdministration() {
   const [isBackup, setIsBackup] = useState(false);
   const [enabled, setEnabled] = useState(true);
   const [secretRef, setSecretRef] = useState("");
+  const [webhookSecretRef, setWebhookSecretRef] = useState("");
   const [configurationJson, setConfigurationJson] = useState("{}");
 
   const [editingConfigurationId, setEditingConfigurationId] = useState("");
@@ -68,6 +69,7 @@ function ProviderAdministration() {
   const [editIsBackup, setEditIsBackup] = useState(false);
   const [editEnabled, setEditEnabled] = useState(true);
   const [editSecretRef, setEditSecretRef] = useState("");
+  const [editWebhookSecretRef, setEditWebhookSecretRef] = useState("");
   const [editConfigurationJson, setEditConfigurationJson] = useState("{}");
 
   const loadProviders = useCallback(async (preferredId?: string) => {
@@ -167,7 +169,24 @@ function ProviderAdministration() {
         );
       }
 
+      const trimmedWebhookSecretRef = webhookSecretRef.trim();
+      const validWebhookVaultReference =
+        selectedProvider?.adapterKey === "FLUTTERWAVE" &&
+        trimmedWebhookSecretRef === "vault:" + selectedId + ":webhook_secret";
+
+      if (trimmedWebhookSecretRef && !validWebhookVaultReference) {
+        throw new Error(
+          "Use vault:<this Flutterwave provider ID>:webhook_secret for the webhook secret reference."
+        );
+      }
+
       const config = parseObject(configurationJson, "Configuration");
+      const submittedConfig = { ...(config ?? {}) };
+      delete submittedConfig.webhookSecretRef;
+      if (trimmedWebhookSecretRef) {
+        submittedConfig.webhookSecretRef = trimmedWebhookSecretRef;
+      }
+
       await api.createAdminProviderConfiguration({
         providerId: selectedId,
         ...(serviceId.trim() ? { serviceId: serviceId.trim() } : {}),
@@ -176,7 +195,7 @@ function ProviderAdministration() {
         isBackup,
         enabled,
         secretRef: trimmedSecretRef,
-        ...(config ? { config } : {}),
+        ...(Object.keys(submittedConfig).length ? { config: submittedConfig } : {}),
       });
       setServiceId("");
       setPriority("100");
@@ -184,6 +203,7 @@ function ProviderAdministration() {
       setIsBackup(false);
       setEnabled(true);
       setSecretRef("");
+      setWebhookSecretRef("");
       setConfigurationJson("{}");
       setShowConfigurationForm(false);
       setNotice(
@@ -204,6 +224,11 @@ function ProviderAdministration() {
     setEditIsBackup(item.isBackup);
     setEditEnabled(item.enabled);
     setEditSecretRef(item.secretRef);
+    setEditWebhookSecretRef(
+      typeof item.config?.webhookSecretRef === "string"
+        ? item.config.webhookSecretRef
+        : "",
+    );
     setEditConfigurationJson(JSON.stringify(item.config ?? {}, null, 2));
     setShowConfigurationForm(false);
     setError("");
@@ -227,8 +252,9 @@ function ProviderAdministration() {
         "Configuration",
       );
       const trimmedSecretRef = editSecretRef.trim();
+      const trimmedWebhookSecretRef = editWebhookSecretRef.trim();
 
-            const validEnvReference = /^env:[A-Z][A-Z0-9_]*$/.test(trimmedSecretRef);
+      const validEnvReference = /^env:[A-Z][A-Z0-9_]*$/.test(trimmedSecretRef);
       const validFlutterwaveVaultReference =
         selectedProvider?.adapterKey === "FLUTTERWAVE" &&
         trimmedSecretRef === "vault:" + selectedId + ":api_secret";
@@ -239,13 +265,29 @@ function ProviderAdministration() {
         );
       }
 
+      const validWebhookVaultReference =
+        selectedProvider?.adapterKey === "FLUTTERWAVE" &&
+        trimmedWebhookSecretRef === "vault:" + selectedId + ":webhook_secret";
+
+      if (trimmedWebhookSecretRef && !validWebhookVaultReference) {
+        throw new Error(
+          "Use vault:<this Flutterwave provider ID>:webhook_secret for the webhook secret reference."
+        );
+      }
+
+      const submittedConfig = { ...(parsedConfig ?? {}) };
+      delete submittedConfig.webhookSecretRef;
+      if (trimmedWebhookSecretRef) {
+        submittedConfig.webhookSecretRef = trimmedWebhookSecretRef;
+      }
+
       await api.updateAdminProviderConfiguration(configurationId, {
         priority: Number(editPriority),
         isPrimary: editIsPrimary,
         isBackup: editIsBackup,
         enabled: editEnabled,
         secretRef: trimmedSecretRef,
-        ...(parsedConfig ? { config: parsedConfig } : {}),
+        ...(Object.keys(submittedConfig).length ? { config: submittedConfig } : {}),
       });
 
       setEditingConfigurationId("");
@@ -472,7 +514,15 @@ function ProviderAdministration() {
                 </div>
                 <div>
                   <dt className="text-xs uppercase tracking-wide text-slate-500">
-                    Adapter / capabilities
+                    Adapter key
+                  </dt>
+                  <dd className="mt-1 break-all text-sm text-slate-200">
+                    {selectedProvider.adapterKey ?? "Not configured"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-slate-500">
+                    Capabilities
                   </dt>
                   <dd className="mt-1 break-words text-sm text-slate-200">
                     {JSON.stringify(selectedProvider.capabilities ?? {})}
@@ -532,9 +582,9 @@ function ProviderAdministration() {
                 className="mt-5 space-y-4 rounded-xl border border-slate-200 p-4"
               >
                 <p className="text-sm text-slate-500">
-                  The secret reference must point to a server-side environment
-                  variable, for example env:CHIMZO_PROVIDER_SECRET. Never paste
-                  the secret value here.
+                  Enter server-side secret references only. For Flutterwave,
+                  the API and webhook secrets must be stored in the provider
+                  vault. Never paste actual secret values here.
                 </p>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <label className="block text-sm text-slate-300">
@@ -571,6 +621,24 @@ function ProviderAdministration() {
                       placeholder="env:CHIMZO_PROVIDER_SECRET"
                     />
                   </label>
+                  {selectedProvider.adapterKey === "FLUTTERWAVE" && (
+                    <label className="block text-sm text-slate-300 sm:col-span-2">
+                      Webhook secret reference (optional)
+                      <input
+                        pattern="vault:[0-9a-fA-F-]{36}:webhook_secret"
+                        title="Use vault:<this Flutterwave provider ID>:webhook_secret"
+                        value={webhookSecretRef}
+                        onChange={(event) =>
+                          setWebhookSecretRef(event.target.value)
+                        }
+                        className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 font-mono text-slate-900"
+                        placeholder={"vault:" + selectedId + ":webhook_secret"}
+                      />
+                      <span className="mt-1 block text-xs text-slate-500">
+                        Reference only. The actual webhook secret stays in the server-side vault.
+                      </span>
+                    </label>
+                  )}
                   <label className="block text-sm text-slate-300 sm:col-span-2">
                     Non-secret configuration JSON
                     <textarea
@@ -694,9 +762,8 @@ function ProviderAdministration() {
                             className="mt-4 space-y-4 rounded-xl border border-slate-200 p-4"
                           >
                             <p className="text-sm text-slate-500">
-                              Edit routing and configuration references here.
-                              Enter a server-side environment variable reference
-                              only. Never enter an actual credential or secret.
+                              Edit routing and server-side secret references.
+                              Never enter an actual credential or secret value.
                             </p>
 
                             <label className="block text-sm text-slate-700">
@@ -729,6 +796,25 @@ function ProviderAdministration() {
                                 className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-slate-900"
                               />
                             </label>
+
+                            {selectedProvider?.adapterKey === "FLUTTERWAVE" && (
+                              <label className="block text-sm text-slate-700">
+                                Webhook secret reference (optional)
+                                <input
+                                  pattern="vault:[0-9a-fA-F-]{36}:webhook_secret"
+                                  title="Use vault:<this Flutterwave provider ID>:webhook_secret"
+                                  value={editWebhookSecretRef}
+                                  onChange={(event) =>
+                                    setEditWebhookSecretRef(event.target.value)
+                                  }
+                                  className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 font-mono text-slate-900"
+                                  placeholder={"vault:" + selectedId + ":webhook_secret"}
+                                />
+                                <span className="mt-1 block text-xs text-slate-500">
+                                  Reference only. The actual webhook secret stays in the server-side vault.
+                                </span>
+                              </label>
+                            )}
 
                             <label className="block text-sm text-slate-700">
                               Non-secret configuration JSON
@@ -914,6 +1000,9 @@ function FlutterwaveCredentialsPanel({
 
     setLoading(true);
     setError("");
+    setStatus(null);
+    setApiSecret("");
+    setWebhookSecret("");
 
     api.getAdminProviderSecretStatus(providerId)
       .then((result) => {

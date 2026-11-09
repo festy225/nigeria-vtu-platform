@@ -55,7 +55,6 @@ export const AIRTIME_PROVIDER_REGISTRATIONS = Symbol(
       provide: AIRTIME_PROVIDER_REGISTRATIONS,
       inject: [
         ProviderRegistryService,
-        KycProviderAdapterResolver,
         AirtimeProviderAdapterResolver,
       ],
       useFactory: async (

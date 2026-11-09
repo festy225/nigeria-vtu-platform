@@ -7,6 +7,7 @@ import {
   api,
   ApiError,
   type SellerApplication,
+  type SellerApplicationType,
   type SellerType,
 } from '@/lib/api';
 import { Badge, Button, Card } from '@/components/ui/primitives';
@@ -14,9 +15,10 @@ import {
   ErrorState,
   LoadingState,
 } from '@/components/ui/loading-state';
+import { useAuth } from '@/components/providers/auth-provider';
 
 const sellerTypes: {
-  value: SellerType;
+  value: SellerApplicationType;
   label: string;
   description: string;
 }[] = [
@@ -29,16 +31,6 @@ const sellerTypes: {
     value: 'VENDOR',
     label: 'Vendor',
     description: 'Operate a business store and sell products through CHIMZO.',
-  },
-  {
-    value: 'WHOLESALER',
-    label: 'Wholesaler',
-    description: 'Sell products in larger quantities and support wholesale pricing.',
-  },
-  {
-    value: 'DISTRIBUTOR',
-    label: 'Distributor',
-    description: 'Supply products at scale while also being able to sell directly.',
   },
 ];
 
@@ -110,13 +102,14 @@ function isExistingApplicationError(error: ApiError) {
 }
 
 export default function SellerApplicationPage() {
+  const { refreshUser } = useAuth();
   const [application, setApplication] = useState<SellerApplication | null>(null);
   const [loading, setLoading] = useState(true);
   const [pageError, setPageError] = useState('');
   const [formError, setFormError] = useState('');
   const [submittedSuccessfully, setSubmittedSuccessfully] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [sellerType, setSellerType] = useState<SellerType | ''>('');
+  const [sellerType, setSellerType] = useState<SellerApplicationType | ''>('');
   const [businessName, setBusinessName] = useState('');
   const [storeName, setStoreName] = useState('');
   const [storeSlug, setStoreSlug] = useState('');
@@ -139,6 +132,21 @@ export default function SellerApplicationPage() {
 
         if (isMissingApplication(caught)) {
           setApplication(null);
+
+          try {
+            const eligibility = await api.getSellerApplicationEligibility();
+            if (active) {
+              setSellerMembershipVerified(eligibility.eligible);
+            }
+          } catch (eligibilityError) {
+            if (active) {
+              setPageError(
+                eligibilityError instanceof ApiError
+                  ? getApiMessage(eligibilityError)
+                  : "Unable to verify seller membership eligibility. Please try again.",
+              );
+            }
+          }
         } else {
           setPageError(
             caught instanceof ApiError
@@ -359,7 +367,14 @@ export default function SellerApplicationPage() {
   }
 
   if (!sellerMembershipVerified) {
-    return <SellerMembershipGate onVerified={() => setSellerMembershipVerified(true)} />;
+    return (
+      <SellerMembershipGate
+        onVerified={async () => {
+          await refreshUser();
+          setSellerMembershipVerified(true);
+        }}
+      />
+    );
   }
 
   return (
@@ -386,6 +401,9 @@ export default function SellerApplicationPage() {
               <h2 className="mt-1 text-lg font-bold text-slate-900">
                 Choose business type
               </h2>
+              <p className="mt-2 text-sm text-slate-600">
+                Wholesaler and Distributor are membership upgrades for existing eligible seller accounts, not separate applications.
+              </p>
             </div>
 
             <div

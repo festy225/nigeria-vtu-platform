@@ -29,6 +29,7 @@ export class MembershipTermsService {
       annual_price_minor: string | null;
       currency: string;
       terms_version: string;
+      terms_and_conditions: string | null;
     }>(
       `SELECT
          id,
@@ -38,7 +39,8 @@ export class MembershipTermsService {
          monthly_price_minor::text AS monthly_price_minor,
          annual_price_minor::text AS annual_price_minor,
          currency,
-         terms_version
+         terms_version,
+         terms_and_conditions
        FROM business_membership_programs
        WHERE enabled = TRUE
        ORDER BY program_code`,
@@ -57,6 +59,7 @@ export class MembershipTermsService {
         : Number(program.annual_price_minor),
       currency: program.currency,
       termsVersion: program.terms_version,
+      termsAndConditions: program.terms_and_conditions,
     }));
   }
   async acceptCurrentTerms(

@@ -2,6 +2,68 @@ import { Reflector } from '@nestjs/core';
 import { SellerController } from '../src/modules/sellers/seller.controller';
 import { FEATURE_KEY } from '../src/common/features/feature.decorator';
 import type { AuthenticatedUser } from '../src/modules/auth/auth.types';
+import { validate } from 'class-validator';
+import { CreateSellerApplicationDto } from '../src/modules/sellers/seller.dtos';
+
+describe('Create seller application membership progression', () => {
+  it.each(['WHOLESALER', 'DISTRIBUTOR'])(
+    'rejects %s as a fresh seller application type',
+    async (sellerType) => {
+      const request = Object.assign(new CreateSellerApplicationDto(), {
+        sellerType,
+        businessName: 'Example Business',
+        storeName: 'Example Store',
+      });
+
+      const errors = await validate(request);
+
+      expect(errors.map((error) => error.property)).toContain('sellerType');
+    },
+  );
+
+  it.each(['RETAILER', 'VENDOR'])(
+    'allows %s as a seller application type',
+    async (sellerType) => {
+      const request = Object.assign(new CreateSellerApplicationDto(), {
+        sellerType,
+        businessName: 'Example Business',
+        storeName: 'Example Store',
+      });
+
+      await expect(validate(request)).resolves.toHaveLength(0);
+    },
+  );
+});
+
+describe('Seller application eligibility endpoint', () => {
+  const handler = SellerController.prototype.getApplicationEligibility;
+
+  it('requires the seller-stores feature', () => {
+    expect(new Reflector().get(FEATURE_KEY, handler)).toBe(
+      'SELLER_STORES_ENABLED',
+    );
+  });
+
+  it('uses the authenticated user ID', async () => {
+    const sellers = {
+      isSellerApplicationEligible: jest.fn().mockResolvedValue(true),
+    };
+    const controller = new SellerController(sellers as never);
+    const user: AuthenticatedUser = {
+      id: 'authenticated-user-id',
+      email: null,
+      phone: null,
+      roles: ['CUSTOMER'],
+    };
+
+    await expect(controller.getApplicationEligibility(user)).resolves.toEqual({
+      eligible: true,
+    });
+    expect(sellers.isSellerApplicationEligible).toHaveBeenCalledWith(
+      'authenticated-user-id',
+    );
+  });
+});
 
 describe('Seller orders endpoint', () => {
   const listSellerOrders = SellerController.prototype.listSellerOrders;

@@ -82,7 +82,13 @@ const migrations = [
   '0048_marketplace_product_images.sql',
   '0049_admin_fee_configuration.sql',
   '0050_marketplace_product_media.sql',
-  '0051_provider_secrets_vault.sql'
+  '0051_provider_secrets_vault.sql',
+  '0052_wholesaler_role_code.sql',
+  '0053_wholesaler_role.sql',
+  '0054_membership_configuration_metadata.sql',
+  '0055_seller_distributor_role_codes.sql',
+  '0056_seller_distributor_roles.sql',
+  '0057_distributor_membership_program.sql'
 ];
 
 const migrationsDirectory = resolve(repoRoot, 'database/migrations');

@@ -1,69 +1,48 @@
-import type { ApiResponse, WalletAccount, UserRole } from '@nigeria-vtu-platform/shared';
+import Link from 'next/link';
 
 export default function HomePage() {
-  const sampleWallet: WalletAccount = {
-    id: 'wallet_001',
-    userId: 'user_001',
-    currency: 'NGN',
-    availableBalance: 50000,
-    heldBalance: 0
-  };
-
-  const sampleApi: ApiResponse<{ wallet: WalletAccount; role: UserRole }> = {
-    success: true,
-    data: {
-      wallet: sampleWallet,
-      role: 'CUSTOMER'
-    }
-  };
-
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-50">
-      <div className="mx-auto flex max-w-6xl flex-col gap-8 px-6 py-16">
-        <header className="flex items-center justify-between border-b border-slate-800 pb-6">
-          <div>
-            <p className="text-sm uppercase tracking-[0.2em] text-emerald-400">Platform Foundation</p>
-            <h1 className="mt-3 text-4xl font-bold">Nigerian VTU Platform</h1>
+    <main className="min-h-screen bg-white text-slate-800">
+      <header className="flex items-center justify-between border-b px-6 py-5">
+        <Link href="/" className="text-2xl font-extrabold text-[#08205B]">CHIM<span className="text-emerald-600">ZO</span></Link>
+        <nav className="flex gap-3">
+          <Link href="/login" className="px-4 py-3 font-semibold">Sign in</Link>
+          <Link href="/register" className="rounded-xl bg-[#08205B] px-5 py-3 font-semibold text-white">Create account</Link>
+        </nav>
+      </header>
+      <section className="bg-gradient-to-br from-emerald-50 via-white to-blue-50 px-6 py-24">
+        <div className="mx-auto max-w-6xl">
+          <p className="font-bold uppercase tracking-widest text-emerald-700">Welcome to CHIMZO</p>
+          <h1 className="mt-5 max-w-3xl text-4xl font-extrabold leading-tight text-[#08205B] sm:text-6xl">Digital services and marketplace opportunities, connected.</h1>
+          <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600">Recharge, pay for services, manage your wallet, discover products and grow your business on one platform.</p>
+          <div className="mt-9 flex flex-wrap gap-4">
+            <Link href="/register" className="rounded-xl bg-emerald-600 px-7 py-4 font-bold text-white">Get started</Link>
+            <Link href="/marketplace" className="rounded-xl border border-slate-300 bg-white px-7 py-4 font-bold text-[#08205B]">Explore marketplace</Link>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-300">
-              Frontend ready
-            </div>
-            <a
-              href="/dashboard/business/seller"
-              className="inline-flex min-h-11 items-center justify-center rounded-lg bg-emerald-400 px-5 py-2 text-sm font-bold text-slate-950 transition hover:bg-emerald-300"
-            >
-              Become a Seller
-            </a>
-          </div>
-        </header>
-
-        <section className="grid gap-6 md:grid-cols-3">
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-            <p className="text-sm text-slate-400">Wallet</p>
-            <p className="mt-3 text-3xl font-semibold">₦{sampleWallet.availableBalance.toLocaleString()}</p>
-          </div>
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-            <p className="text-sm text-slate-400">Role</p>
-            <p className="mt-3 text-3xl font-semibold uppercase">{sampleApi.data?.role}</p>
-          </div>
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-            <p className="text-sm text-slate-400">API</p>
-            <p className="mt-3 text-3xl font-semibold">{sampleApi.success ? 'Live' : 'Pending'}</p>
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-          <h2 className="text-xl font-semibold">Monorepo foundation is active</h2>
-          <ul className="mt-4 list-disc space-y-2 pl-6 text-slate-300">
-            <li>Frontend application scaffolded with Next.js</li>
-            <li>Backend application scaffolded with NestJS</li>
-            <li>Shared types package prepared for future modules</li>
-            <li>Environment templates created for local development</li>
-            <li>Documentation and project setup included</li>
-          </ul>
-        </section>
-      </div>
+        </div>
+      </section>
+      <section className="mx-auto max-w-6xl px-6 py-16">
+        <h2 className="text-3xl font-extrabold text-[#08205B]">One platform. Multiple possibilities.</h2>
+        <div className="mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            ['Airtime & Data', 'Recharge lines and buy data bundles.', '/dashboard/services'],
+            ['Bills & Utilities', 'Access electricity and TV services.', '/dashboard/services'],
+            ['Marketplace', 'Discover products from CHIMZO sellers.', '/marketplace'],
+            ['Your Wallet', 'Manage payments and wallet activity.', '/dashboard/wallet'],
+          ].map(([title, description, href]) => (
+            <Link key={title} href={href} className="rounded-2xl border border-slate-200 p-6 hover:border-emerald-400 hover:shadow-lg">
+              <h3 className="font-bold text-[#08205B]">{title}</h3>
+              <p className="mt-3 text-sm leading-6 text-slate-500">{description}</p>
+              <span className="mt-5 inline-block font-semibold text-emerald-700">Explore →</span>
+            </Link>
+          ))}
+        </div>
+      </section>
+      <footer className="bg-[#08205B] px-6 py-10 text-center text-white">
+        <h2 className="text-2xl font-bold">Start with CHIMZO today.</h2>
+        <Link href="/register" className="mt-5 inline-block rounded-xl bg-emerald-400 px-6 py-3 font-bold text-[#08205B]">Create your account</Link>
+        <p className="mt-8 text-sm text-blue-200">© {new Date().getFullYear()} CHIMZO. All rights reserved.</p>
+      </footer>
     </main>
   );
 }

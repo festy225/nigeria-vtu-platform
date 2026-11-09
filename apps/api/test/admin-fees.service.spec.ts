@@ -126,4 +126,153 @@ describe('AdminFeesService', () => {
     expect(client.query).toHaveBeenCalledTimes(1);
     expect(audit.record).not.toHaveBeenCalled();
   });
+
+  it('lists Seller, Wholesaler, and Distributor configuration without filtering by enabled state', async () => {
+    const programs = [
+      { programCode: 'SELLER', enabled: false },
+      { programCode: 'WHOLESALER', enabled: false },
+      { programCode: 'DISTRIBUTOR', enabled: false },
+    ];
+    db.query.mockResolvedValueOnce({ rows: programs });
+
+    await expect(service.listPrograms()).resolves.toEqual(programs);
+    expect(db.query.mock.calls[0]?.[0]).toContain('FROM business_membership_programs program');
+    expect(db.query.mock.calls[0]?.[0]).toContain('SELECT program.id AS id');
+    expect(db.query.mock.calls[0]?.[0]).not.toContain('WHERE enabled');
+  });
+
+  it.each(['SELLER', 'WHOLESALER', 'DISTRIBUTOR'])(
+    'independently configures and audits the %s program',
+    async (programCode) => {
+      const saved = {
+        id: `${programCode.toLowerCase()}-program-id`,
+        programCode,
+        enabled: true,
+        termsAndConditions: 'Current terms',
+      };
+      client.query
+        .mockResolvedValueOnce({ rows: [{ id: saved.id, enabled: false }] })
+        .mockResolvedValueOnce({ rows: [saved] });
+
+      await expect(
+        service.updateProgram(programCode, {
+          displayName: programCode,
+          description: `${programCode} description`,
+          enabled: true,
+          monthlyPriceMinor: 1200,
+          annualPriceMinor: 12000,
+          currency: 'NGN',
+          termsVersion: '2026-01',
+          termsAndConditions: 'Current terms',
+          validityDuration: null,
+          validityUnit: null,
+        }, 'super-admin-id'),
+      ).resolves.toEqual(saved);
+
+      const calls = client.query.mock.calls as Array<[string, unknown[]]>;
+      expect(calls[1]?.[1]).toEqual([
+        programCode,
+        programCode,
+        `${programCode} description`,
+        true,
+        1200,
+        12000,
+        'NGN',
+        null,
+        null,
+        '2026-01',
+        'Current terms',
+        'super-admin-id',
+      ]);
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorId: 'super-admin-id',
+          action: 'MEMBERSHIP_PROGRAM_UPDATED',
+          resourceId: saved.id,
+          afterData: saved,
+        }),
+        client,
+      );
+    },
+  );
+
+  it('preserves the configured membership duration when the admin saves program settings', async () => {
+    const saved = { id: 'seller-program-id', programCode: 'SELLER' };
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: saved.id,
+          validity_duration: 6,
+          validity_unit: 'MONTH',
+          enabled: true,
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [saved] });
+
+    await service.updateProgram('SELLER', {
+      displayName: 'Seller',
+      enabled: true,
+      monthlyPriceMinor: 1200,
+      annualPriceMinor: 12000,
+      currency: 'NGN',
+      termsVersion: '2026-01',
+      termsAndConditions: 'Current terms',
+      validityDuration: 6,
+      validityUnit: 'MONTH',
+    }, 'super-admin-id');
+
+    const calls = client.query.mock.calls as Array<[string, unknown[]]>;
+    expect(calls[1]?.[1]).toEqual([
+      'SELLER',
+      'Seller',
+      null,
+      true,
+      1200,
+      12000,
+      'NGN',
+      6,
+      'MONTH',
+      '2026-01',
+      'Current terms',
+      'super-admin-id',
+    ]);
+    expect(calls[1]?.[0]).toContain(
+      'WHERE program_code = $1',
+    );
+  });
+
+  it('does not enable a program without configured terms and conditions', async () => {
+    await expect(
+      service.updateProgram('DISTRIBUTOR', {
+        displayName: 'Distributor',
+        enabled: true,
+        monthlyPriceMinor: 100,
+        annualPriceMinor: null,
+        currency: 'NGN',
+        termsVersion: 'v1',
+        termsAndConditions: '',
+      }, 'super-admin-id'),
+    ).rejects.toThrow(BadRequestException);
+    expect(db.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it('filters membership payment history by any configured program and state', async () => {
+    const item = { programCode: 'DISTRIBUTOR', state: 'SUCCESSFUL' };
+    db.query
+      .mockResolvedValueOnce({ rows: [{ total: '1' }] })
+      .mockResolvedValueOnce({ rows: [item] });
+    await expect(
+      service.listMembershipPayments('distributor', 'successful'),
+    ).resolves.toEqual({ items: [item], total: 1, limit: 50, offset: 0 });
+    expect(db.query.mock.calls[0]?.[1]).toEqual(['DISTRIBUTOR', 'SUCCESSFUL']);
+    expect(db.query.mock.calls[0]?.[0]).toContain("payment.purpose = 'BUSINESS_MEMBERSHIP'");
+    expect(db.query.mock.calls[1]?.[1]).toEqual(['DISTRIBUTOR', 'SUCCESSFUL', 50, 0]);
+  });
+
+  it('validates payment history pagination bounds', async () => {
+    await expect(
+      service.listMembershipPayments(undefined, undefined, '101', '0'),
+    ).rejects.toThrow(BadRequestException);
+    expect(db.query).not.toHaveBeenCalled();
+  });
 });

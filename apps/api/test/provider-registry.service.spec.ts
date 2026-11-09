@@ -200,7 +200,7 @@ describe('ProviderRegistryService.updateProviderConfiguration', () => {
   it('rejects an invalid secret reference before opening a transaction', async () => {
     await expect(
       service.updateProviderConfiguration(configurationId, { secretRef: 'plain-text-secret' }),
-    ).rejects.toThrow('secretRef must use the env:VARIABLE_NAME format');
+    ).rejects.toThrow('secretRef must be an env reference or a provider API-secret vault reference');
 
     expect(database.withTransaction).not.toHaveBeenCalled();
   });

@@ -1,4 +1,8 @@
-﻿import { ForbiddenException, NotFoundException } from '@nestjs/common';
+﻿import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { SellerService } from '../src/modules/sellers/seller.service';
 import type { ReviewSellerApplicationDto } from '../src/modules/sellers/seller.dtos';
 
@@ -31,6 +35,8 @@ describe('SellerService membership eligibility', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    transactionClient.query.mockReset();
+    database.query.mockReset();
     database.query.mockResolvedValue({ rows: [], rowCount: 0 });
     database.withTransaction.mockImplementation(
       (work: (client: typeof transactionClient) => unknown) =>
@@ -46,6 +52,316 @@ describe('SellerService membership eligibility', () => {
       rowCount: 1,
     });
   };
+
+  it('grants Seller workspace access only after a successful paid Seller membership', async () => {
+    transactionClient.query
+      .mockResolvedValueOnce({ rows: [{ payment_id: 'seller-membership-payment' }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ id: 'seller-role-id', code: 'SELLER' }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+
+    await expect(
+      service.activateSellerMembership('user-id'),
+    ).resolves.toEqual({ active: true, sellerType: 'SELLER' });
+    expect(transactionClient.query.mock.calls[0]?.[0]).toContain("payment.state = 'SUCCESSFUL'");
+    expect(transactionClient.query.mock.calls[2]?.[0]).toContain(
+      'ON CONFLICT (user_id, role_id) DO NOTHING',
+    );
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'SELLER_MEMBERSHIP_ACTIVATED' }),
+      transactionClient,
+    );
+  });
+
+  it('does not activate a wholesaler upgrade before seller approval and verified KYC', async () => {
+    transactionClient.query.mockResolvedValueOnce({
+      rows: [{
+        id: 'seller-id',
+        seller_type: 'RETAILER',
+        onboarding_status: 'UNDER_REVIEW',
+        kyc_status: 'VERIFIED',
+      }],
+      rowCount: 1,
+    });
+
+    await expect(
+      service.activateWholesalerUpgrade('user-id'),
+    ).rejects.toThrow(ForbiddenException);
+
+    expect(transactionClient.query).toHaveBeenCalledTimes(1);
+    expect(transactionClient.query.mock.calls[0]?.[0]).toContain('FOR UPDATE');
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('does not grant a role when a successful current WHOLESALER entitlement is missing', async () => {
+    transactionClient.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'seller-id',
+          seller_type: 'RETAILER',
+          onboarding_status: 'APPROVED',
+          kyc_status: 'VERIFIED',
+        }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
+        rows: [{ payment_id: 'seller-membership-payment' }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+    await expect(
+      service.activateWholesalerUpgrade('user-id'),
+    ).rejects.toThrow(ForbiddenException);
+
+    const entitlementQuery = transactionClient.query.mock.calls[2]?.[0] ?? '';
+    expect(entitlementQuery).toContain('WHERE program.program_code = $2');
+    expect(transactionClient.query.mock.calls[2]?.[1]).toEqual([
+      'user-id',
+      'WHOLESALER',
+    ]);
+    expect(entitlementQuery).toContain("payment.state = 'SUCCESSFUL'");
+    expect(entitlementQuery).toContain('acceptance.terms_version = program.terms_version');
+    expect(transactionClient.query).toHaveBeenCalledTimes(3);
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('grants the role and updates seller type only after a verified WHOLESALER payment', async () => {
+    transactionClient.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'seller-id',
+          seller_type: 'RETAILER',
+          onboarding_status: 'APPROVED',
+          kyc_status: 'VERIFIED',
+        }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
+        rows: [{ payment_id: 'seller-membership-payment' }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
+        rows: [{ id: 'entitlement-id', payment_id: 'payment-id' }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
+        rows: [{ id: 'seller-role-id', code: 'SELLER' }, { id: 'wholesaler-role-id', code: 'WHOLESALER' }],
+        rowCount: 2,
+      })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+
+    await expect(
+      service.activateWholesalerUpgrade('user-id'),
+    ).resolves.toEqual({ active: true, sellerType: 'WHOLESALER' });
+
+    expect(transactionClient.query.mock.calls[4]?.[0]).toContain('INSERT INTO user_roles');
+    expect(transactionClient.query.mock.calls[5]?.[0]).toContain('UPDATE marketplace_sellers');
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorId: 'user-id',
+        action: 'WHOLESALER_UPGRADE_ACTIVATED',
+        resourceId: 'seller-id',
+      }),
+      transactionClient,
+    );
+  });
+
+  it('keeps repeated verified activations idempotent through the user-role constraint', async () => {
+    const approvedSeller = {
+      id: 'seller-id',
+      seller_type: 'RETAILER',
+      onboarding_status: 'APPROVED',
+      kyc_status: 'VERIFIED',
+    };
+    for (const seller of [approvedSeller, { ...approvedSeller, seller_type: 'WHOLESALER' }]) {
+      transactionClient.query
+        .mockResolvedValueOnce({ rows: [seller], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [{ payment_id: 'seller-membership-payment' }], rowCount: 1 })
+        .mockResolvedValueOnce({
+          rows: [{ id: 'entitlement-id', payment_id: 'payment-id' }],
+          rowCount: 1,
+        })
+        .mockResolvedValueOnce({
+          rows: [{ id: 'seller-role-id', code: 'SELLER' }, { id: 'wholesaler-role-id', code: 'WHOLESALER' }],
+          rowCount: 2,
+        })
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+        .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    }
+
+    await expect(service.activateWholesalerUpgrade('user-id')).resolves.toMatchObject({ active: true });
+    await expect(service.activateWholesalerUpgrade('user-id')).resolves.toMatchObject({ active: true });
+
+    const roleInserts = transactionClient.query.mock.calls.filter(([query]) =>
+      query.includes('INSERT INTO user_roles'),
+    );
+    expect(roleInserts).toHaveLength(2);
+    expect(roleInserts.every(([query]) =>
+      query.includes('ON CONFLICT (user_id, role_id) DO NOTHING'),
+    )).toBe(true);
+  });
+
+  it('does not grant Distributor access without a verified paid Distributor entitlement', async () => {
+    transactionClient.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'seller-id',
+          seller_type: 'WHOLESALER',
+          onboarding_status: 'APPROVED',
+          kyc_status: 'VERIFIED',
+        }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({ rows: [{ payment_id: 'seller-payment' }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ payment_id: 'wholesaler-payment' }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+    await expect(
+      service.activateDistributorUpgrade('user-id'),
+    ).rejects.toThrow(ForbiddenException);
+
+    expect(transactionClient.query.mock.calls[3]?.[0]).toContain("payment.state = 'SUCCESSFUL'");
+    expect(transactionClient.query.mock.calls[3]?.[0]).toContain('acceptance.terms_version = program.terms_version');
+    expect(transactionClient.query).toHaveBeenCalledTimes(4);
+    expect(transactionClient.query.mock.calls.some(([query]) =>
+      String(query).includes('INSERT INTO user_roles'),
+    )).toBe(false);
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it.each(['PENDING', 'FAILED'])(
+    'does not activate a Distributor entitlement for a %s payment',
+    async () => {
+      transactionClient.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: 'seller-id',
+            seller_type: 'WHOLESALER',
+            onboarding_status: 'APPROVED',
+            kyc_status: 'VERIFIED',
+          }],
+          rowCount: 1,
+        })
+        .mockResolvedValueOnce({ rows: [{ payment_id: 'seller-payment' }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [{ payment_id: 'wholesaler-payment' }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+      await expect(
+        service.activateDistributorUpgrade('user-id'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(transactionClient.query.mock.calls[3]?.[0]).toContain(
+        "payment.state = 'SUCCESSFUL'",
+      );
+      expect(transactionClient.query.mock.calls.some(([query]) =>
+        String(query).includes('INSERT INTO user_roles'),
+      )).toBe(false);
+    },
+  );
+
+  it('activates Distributor only for an approved Wholesaler with verified membership payments', async () => {
+    transactionClient.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'seller-id',
+          seller_type: 'WHOLESALER',
+          onboarding_status: 'APPROVED',
+          kyc_status: 'VERIFIED',
+        }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({ rows: [{ payment_id: 'seller-payment' }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ payment_id: 'wholesaler-payment' }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ payment_id: 'distributor-payment' }], rowCount: 1 })
+      .mockResolvedValueOnce({
+        rows: [
+          { id: 'seller-role-id', code: 'SELLER' },
+          { id: 'wholesaler-role-id', code: 'WHOLESALER' },
+          { id: 'distributor-role-id', code: 'DISTRIBUTOR' },
+        ],
+        rowCount: 3,
+      })
+      .mockResolvedValueOnce({ rows: [], rowCount: 3 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+
+    await expect(
+      service.activateDistributorUpgrade('user-id'),
+    ).resolves.toEqual({ active: true, sellerType: 'DISTRIBUTOR' });
+
+    expect(transactionClient.query.mock.calls[5]?.[0]).toContain('ON CONFLICT (user_id, role_id) DO NOTHING');
+    expect(transactionClient.query.mock.calls[6]?.[0]).toContain('seller_type = $2');
+    expect(transactionClient.query.mock.calls[6]?.[1]).toEqual(['seller-id', 'DISTRIBUTOR']);
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorId: 'user-id',
+        action: 'DISTRIBUTOR_UPGRADE_ACTIVATED',
+        afterData: { sellerType: 'DISTRIBUTOR', membershipPaymentId: 'distributor-payment' },
+      }),
+      transactionClient,
+    );
+  });
+
+  it('keeps repeated Distributor activation requests idempotent', async () => {
+    const activeRoles = [
+      { id: 'seller-role-id', code: 'SELLER' },
+      { id: 'wholesaler-role-id', code: 'WHOLESALER' },
+      { id: 'distributor-role-id', code: 'DISTRIBUTOR' },
+    ];
+    for (const sellerType of ['WHOLESALER', 'DISTRIBUTOR']) {
+      transactionClient.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: 'seller-id',
+            seller_type: sellerType,
+            onboarding_status: 'APPROVED',
+            kyc_status: 'VERIFIED',
+          }],
+          rowCount: 1,
+        })
+        .mockResolvedValueOnce({ rows: [{ payment_id: 'seller-payment' }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [{ payment_id: 'wholesaler-payment' }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [{ payment_id: 'distributor-payment' }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: activeRoles, rowCount: 3 })
+        .mockResolvedValueOnce({ rows: [], rowCount: sellerType === 'WHOLESALER' ? 3 : 0 });
+      if (sellerType === 'WHOLESALER') {
+        transactionClient.query.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+      }
+    }
+
+    await expect(
+      service.activateDistributorUpgrade('user-id'),
+    ).resolves.toMatchObject({ active: true, sellerType: 'DISTRIBUTOR' });
+    await expect(
+      service.activateDistributorUpgrade('user-id'),
+    ).resolves.toMatchObject({ active: true, sellerType: 'DISTRIBUTOR' });
+
+    const roleInserts = transactionClient.query.mock.calls.filter(([query]) =>
+      query.includes('INSERT INTO user_roles'),
+    );
+    expect(roleInserts).toHaveLength(2);
+    expect(roleInserts.every(([query]) =>
+      query.includes('ON CONFLICT (user_id, role_id) DO NOTHING'),
+    )).toBe(true);
+  });
+
+  it('rejects Distributor upgrades for accounts without an approved Wholesaler application', async () => {
+    transactionClient.query.mockResolvedValueOnce({
+      rows: [{
+        id: 'seller-id',
+        seller_type: 'RETAILER',
+        onboarding_status: 'APPROVED',
+        kyc_status: 'VERIFIED',
+      }],
+      rowCount: 1,
+    });
+
+    await expect(
+      service.activateDistributorUpgrade('user-id'),
+    ).rejects.toThrow(ForbiddenException);
+
+    expect(transactionClient.query).toHaveBeenCalledTimes(1);
+    expect(audit.record).not.toHaveBeenCalled();
+  });
 
   it('allows an active, unexpired SELLER entitlement with current terms acceptance', async () => {
     setEligibility(true);
@@ -145,6 +461,41 @@ describe('SellerService membership eligibility', () => {
     const insert = database.query.mock.calls[3]?.[0] ?? '';
     expect(insert).toContain('INSERT INTO marketplace_sellers');
     expect(insert).not.toMatch(/roles|user_roles|business_membership_entitlements/i);
+  });
+
+  it('returns ConflictException when another request creates the same user application', async () => {
+    setEligibility(true);
+    database.query
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockRejectedValueOnce({ code: '23505' })
+      .mockResolvedValueOnce({
+        rows: [{ id: 'existing-seller-id' }],
+        rowCount: 1,
+      });
+
+    await expect(
+      service.createApplication('authenticated-user-id', sellerApplication),
+    ).rejects.toThrow(
+      'A marketplace seller application already exists for this account',
+    );
+  });
+
+  it('returns ConflictException when another request claims the same store slug', async () => {
+    setEligibility(true);
+    database.query
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockRejectedValueOnce({ code: '23505' })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({
+        rows: [{ id: 'existing-slug-id' }],
+        rowCount: 1,
+      });
+
+    await expect(
+      service.createApplication('authenticated-user-id', sellerApplication),
+    ).rejects.toThrow('That store slug is already in use');
   });
 
 

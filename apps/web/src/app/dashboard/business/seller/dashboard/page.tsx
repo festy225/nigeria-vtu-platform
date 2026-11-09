@@ -9,6 +9,7 @@ import type {
   SellerProduct,
   SellerProductMedia,
 } from '../../../../../lib/api';
+import { SellerMetricCard } from './SellerWorkspace';
 
 function formatMoney(amountMinor: number, currency: string) {
   try {
@@ -474,28 +475,10 @@ export default function SellerDashboardPage() {
       </header>
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Total orders</p>
-          <p className="mt-3 text-3xl font-bold text-[#08205B]">{orders.length}</p>
-          <p className="mt-2 text-xs text-slate-500">Orders assigned to your store</p>
-        </article>
-        <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Active orders</p>
-          <p className="mt-3 text-3xl font-bold text-amber-700">{activeOrders}</p>
-          <p className="mt-2 text-xs text-slate-500">Awaiting processing or fulfillment</p>
-        </article>
-        <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Completed orders</p>
-          <p className="mt-3 text-3xl font-bold text-emerald-700">{completedOrders}</p>
-          <p className="mt-2 text-xs text-slate-500">Completed or delivered</p>
-        </article>
-        <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Seller order value</p>
-          <p className="mt-3 break-words text-2xl font-bold text-[#08205B]">
-            {salesSummary}
-          </p>
-          <p className="mt-2 text-xs text-slate-500">Based on seller order totals</p>
-        </article>
+        <SellerMetricCard label="Total orders" value={orders.length} description="Orders assigned to your store" tone="blue" />
+        <SellerMetricCard label="Active orders" value={activeOrders} description="Awaiting processing or fulfillment" tone="amber" />
+        <SellerMetricCard label="Completed orders" value={completedOrders} description="Completed or delivered" tone="teal" />
+        <SellerMetricCard label="Seller order value" value={salesSummary} description="Based on seller order totals" />
       </section>
 
       <section className="grid gap-5 lg:grid-cols-3">

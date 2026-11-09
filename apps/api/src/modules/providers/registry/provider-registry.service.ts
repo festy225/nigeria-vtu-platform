@@ -125,7 +125,7 @@ export class ProviderRegistryService {
         `,
         [
           dto.name.trim(),
-          dto.adapterKey.trim(),
+          dto.adapterKey.trim().toUpperCase(),
           dto.baseUrl ?? null,
           JSON.stringify(dto.capabilities ?? {}),
         ],
@@ -193,7 +193,7 @@ export class ProviderRegistryService {
               ? webhookVaultRef.match(/^vault:([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):webhook_secret$/i)
               : null;
 
-          if (apiVaultMatch || webhookVaultMatch) {
+          if (apiVaultMatch || webhookVaultMatch || webhookVaultRef !== undefined) {
             const providerCheck = await client.query<{ adapter_key: string | null }>(
               'SELECT adapter_key FROM api_providers WHERE id = $1',
               [dto.providerId],

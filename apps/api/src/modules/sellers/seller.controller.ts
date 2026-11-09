@@ -73,6 +73,32 @@ export class SellerController {
     return this.sellers.createApplication(user.id, dto);
   }
 
+  @Get('application/eligibility')
+  @RequiresFeature('SELLER_STORES_ENABLED')
+  async getApplicationEligibility(@CurrentUser() user: AuthenticatedUser) {
+    return {
+      eligible: await this.sellers.isSellerApplicationEligible(user.id),
+    };
+  }
+
+  @Post('upgrade/wholesaler/activate')
+  @RequiresFeature('SELLER_STORES_ENABLED')
+  activateWholesalerUpgrade(@CurrentUser() user: AuthenticatedUser) {
+    return this.sellers.activateWholesalerUpgrade(user.id);
+  }
+
+  @Post('upgrade/distributor/activate')
+  @RequiresFeature('SELLER_STORES_ENABLED')
+  activateDistributorUpgrade(@CurrentUser() user: AuthenticatedUser) {
+    return this.sellers.activateDistributorUpgrade(user.id);
+  }
+
+  @Post('membership/seller/activate')
+  @RequiresFeature('SELLER_STORES_ENABLED')
+  activateSellerMembership(@CurrentUser() user: AuthenticatedUser) {
+    return this.sellers.activateSellerMembership(user.id);
+  }
+
   @Get('application')
   @RequiresFeature('SELLER_STORES_ENABLED')
   getApplication(@CurrentUser() user: AuthenticatedUser) {

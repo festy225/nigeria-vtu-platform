@@ -1,5 +1,5 @@
 export type CurrencyCode = 'NGN' | 'USD';
-export type UserRole = 'CUSTOMER' | 'AGENT' | 'VENDOR' | 'ADMIN' | 'SUPER_ADMIN';
+export type UserRole = 'CUSTOMER' | 'AGENT' | 'VENDOR' | 'SELLER' | 'WHOLESALER' | 'DISTRIBUTOR' | 'ADMIN' | 'SUPER_ADMIN';
 
 export type ServiceType =
   | 'AIRTIME'

@@ -1,4 +1,4 @@
-﻿-- CHIMZO configurable membership prices and platform fee definitions.
+-- CHIMZO configurable membership prices and platform fee definitions.
 -- Prices and rules are deliberately not seeded with invented amounts.
 
 INSERT INTO business_membership_programs

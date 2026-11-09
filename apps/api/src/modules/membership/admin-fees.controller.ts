@@ -1,4 +1,4 @@
-﻿import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { Roles } from '../../common/auth/auth.decorators';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/auth.types';
@@ -12,6 +12,16 @@ export class AdminFeesController {
   @Get('membership-programs')
   listPrograms() {
     return this.fees.listPrograms();
+  }
+
+  @Get('membership-payments')
+  listMembershipPayments(
+    @Query('programCode') programCode?: string,
+    @Query('state') state?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.fees.listMembershipPayments(programCode, state, limit, offset);
   }
 
   @Patch('membership-programs/:code')

@@ -3,7 +3,8 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
-import { join } from 'path';
+import { existsSync } from 'fs';
+import { resolve } from 'path';
 import { AppModule } from './app.module';
 import { JwtAuthGuard } from './common/auth/jwt-auth.guard';
 import { RolesGuard } from './common/auth/roles.guard';
@@ -14,7 +15,13 @@ import { RolesGuard } from './common/auth/roles.guard';
       isGlobal: true,
       cache: true,
       expandVariables: true,
-      envFilePath: join(process.cwd(), '../../.env'),
+      envFilePath:
+        [
+          resolve(process.cwd(), 'apps/api/.env'),
+          resolve(process.cwd(), '.env'),
+          resolve(__dirname, '../.env'),
+          resolve(__dirname, '../../../../.env'),
+        ].find(existsSync) ?? resolve(process.cwd(), 'apps/api/.env'),
     }),
     JwtModule.registerAsync({
       imports: [ConfigModule],

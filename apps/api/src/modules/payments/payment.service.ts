@@ -48,10 +48,13 @@ interface WalletRow { id: string; user_id: string; currency: CurrencyCode; statu
 
 interface MembershipProgramRow {
   id: string;
+  program_code: 'SELLER' | 'WHOLESALER' | 'DISTRIBUTOR';
   enabled: boolean;
   monthly_price_minor: string | null;
   annual_price_minor: string | null;
   currency: CurrencyCode;
+  terms_configured: boolean;
+  terms_accepted: boolean;
 }
 
 interface MembershipPaymentRow {
@@ -277,11 +280,22 @@ if (response.status !== 'PENDING') {
 
     const initialization = await this.db.withTransaction(async (client) => {
       const programResult = await client.query<MembershipProgramRow>(
-        `SELECT id, enabled, monthly_price_minor, annual_price_minor, currency
-         FROM business_membership_programs
-         WHERE id = $1
+        `SELECT program.id, program.program_code, program.enabled,
+                program.monthly_price_minor, program.annual_price_minor,
+                program.currency,
+                (program.terms_and_conditions IS NOT NULL
+                  AND btrim(program.terms_and_conditions) <> '') AS terms_configured,
+                EXISTS (
+                  SELECT 1
+                  FROM business_membership_terms_acceptances acceptance
+                  WHERE acceptance.user_id = $2
+                    AND acceptance.membership_program_id = program.id
+                    AND acceptance.terms_version = program.terms_version
+                ) AS terms_accepted
+         FROM business_membership_programs program
+         WHERE program.id = $1
          FOR SHARE`,
-        [request.membershipProgramId],
+        [request.membershipProgramId, userId],
       );
       const program = programResult.rows[0];
       if (!program) {
@@ -290,6 +304,16 @@ if (response.status !== 'PENDING') {
       if (!program.enabled) {
         throw new ForbiddenException(
           'Business membership program is not enabled',
+        );
+      }
+      if (!program.terms_accepted) {
+        throw new ForbiddenException(
+          'Accept the current membership terms before purchasing this program',
+        );
+      }
+      if (!program.terms_configured) {
+        throw new ForbiddenException(
+          'Membership terms and conditions are not configured for this program',
         );
       }
 
@@ -302,6 +326,13 @@ if (response.status !== 'PENDING') {
       if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) {
         throw new BadRequestException(
           `The configured ${request.billingPeriod.toLowerCase()} price is not valid for this program`,
+        );
+      }
+      if (program.program_code !== 'SELLER') {
+        await this.assertMembershipUpgradeEligible(
+          client,
+          userId,
+          program.program_code,
         );
       }
 
@@ -507,6 +538,86 @@ if (response.status !== 'PENDING') {
         throw error;
       }
       throw new BadGatewayException('Payment provider initialization failed');
+    }
+  }
+
+  private async assertMembershipUpgradeEligible(
+    client: PoolClient,
+    userId: string,
+    target: 'WHOLESALER' | 'DISTRIBUTOR',
+  ): Promise<void> {
+    const result = await client.query<{ eligible: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM marketplace_sellers seller
+         WHERE seller.user_id = $1
+           AND seller.onboarding_status = 'APPROVED'
+           AND seller.kyc_status = 'VERIFIED'
+           AND (
+             ($2 = 'WHOLESALER'
+               AND seller.seller_type IN ('RETAILER', 'VENDOR', 'WHOLESALER', 'DISTRIBUTOR'))
+             OR ($2 = 'DISTRIBUTOR' AND seller.seller_type = 'WHOLESALER')
+           )
+           AND EXISTS (
+             SELECT 1
+             FROM business_membership_programs source_program
+             JOIN business_membership_entitlements entitlement
+               ON entitlement.membership_program_id = source_program.id
+             JOIN payments payment
+               ON payment.id = entitlement.payment_id
+              AND payment.user_id = entitlement.user_id
+              AND payment.membership_program_id = entitlement.membership_program_id
+             WHERE source_program.program_code = 'SELLER'
+               AND entitlement.user_id = seller.user_id
+               AND entitlement.status = 'ACTIVE'
+               AND entitlement.starts_at <= now()
+               AND (entitlement.expires_at IS NULL OR entitlement.expires_at > now())
+               AND payment.purpose = 'BUSINESS_MEMBERSHIP'
+               AND payment.state = 'SUCCESSFUL'
+               AND EXISTS (
+                 SELECT 1
+                 FROM business_membership_terms_acceptances acceptance
+                 WHERE acceptance.user_id = entitlement.user_id
+                   AND acceptance.membership_program_id = source_program.id
+                   AND acceptance.terms_version = source_program.terms_version
+               )
+           )
+           AND (
+             $2 <> 'DISTRIBUTOR'
+             OR EXISTS (
+               SELECT 1
+               FROM business_membership_programs source_program
+               JOIN business_membership_entitlements entitlement
+                 ON entitlement.membership_program_id = source_program.id
+               JOIN payments payment
+                 ON payment.id = entitlement.payment_id
+                AND payment.user_id = entitlement.user_id
+                AND payment.membership_program_id = entitlement.membership_program_id
+               WHERE source_program.program_code = 'WHOLESALER'
+                 AND entitlement.user_id = seller.user_id
+                 AND entitlement.status = 'ACTIVE'
+                 AND entitlement.starts_at <= now()
+                 AND (entitlement.expires_at IS NULL OR entitlement.expires_at > now())
+                 AND payment.purpose = 'BUSINESS_MEMBERSHIP'
+                 AND payment.state = 'SUCCESSFUL'
+                 AND EXISTS (
+                   SELECT 1
+                   FROM business_membership_terms_acceptances acceptance
+                   WHERE acceptance.user_id = entitlement.user_id
+                     AND acceptance.membership_program_id = source_program.id
+                     AND acceptance.terms_version = source_program.terms_version
+                 )
+             )
+           )
+       ) AS eligible`,
+      [userId, target],
+    );
+    if (!result.rows[0]?.eligible) {
+      throw new ForbiddenException(
+        target === 'WHOLESALER'
+          ? 'Wholesaler membership requires an approved seller account, verified KYC, and active Seller membership'
+          : 'Distributor membership requires an approved Wholesaler account, verified KYC, and active Seller and Wholesaler memberships',
+      );
     }
   }
 
@@ -1014,6 +1125,16 @@ if (response.status !== 'PENDING') {
           paymentReference: payment.payment_reference,
           alreadyProcessed: true,
         };
+      }
+
+      if (
+        payment.payment_purpose === 'BUSINESS_MEMBERSHIP' &&
+        ['FAILED', 'CANCELLED', 'REFUNDED'].includes(payment.payment_state) &&
+        event.status === 'SUCCESS'
+      ) {
+        throw new ConflictException(
+          'A terminal membership payment cannot be settled as successful; reconcile any late provider charge separately',
+        );
       }
 
   if (

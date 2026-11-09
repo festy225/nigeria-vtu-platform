@@ -1,4 +1,4 @@
-﻿CREATE TABLE IF NOT EXISTS provider_secrets (
+CREATE TABLE IF NOT EXISTS provider_secrets (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     provider_id UUID NOT NULL REFERENCES api_providers(id) ON DELETE CASCADE,
     secret_name VARCHAR(80) NOT NULL,

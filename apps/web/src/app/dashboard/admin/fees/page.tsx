@@ -8,6 +8,21 @@ type Program = {
   id: string; programCode: string; displayName: string; description: string | null;
   enabled: boolean; monthlyPriceMinor: string | number | null;
   annualPriceMinor: string | number | null; currency: string; termsVersion: string;
+  validityDuration: number | null; validityUnit: string | null;
+  termsAndConditions: string | null; updatedAt: string; updatedByUserId: string | null;
+  updatedByEmail: string | null; updatedByPhone: string | null;
+};
+type MembershipPayment = {
+  paymentId: string; paymentReference: string; userId: string; userEmail: string | null;
+  programCode: string; programName: string; amountMinor: string | number; currency: string;
+  billingPeriod: string; state: string; providerName: string | null;
+  providerReference: string | null; createdAt: string;
+};
+type MembershipPaymentPage = {
+  items: MembershipPayment[];
+  total: number;
+  limit: number;
+  offset: number;
 };
 type Rule = {
   id: string; feeCode: string; displayName: string; description: string | null;
@@ -25,17 +40,44 @@ type RuleForm = typeof emptyRule;
 
 function FeesWorkspace() {
   const [programs, setPrograms] = useState<Program[]>([]);
+  const [activeProgramCode, setActiveProgramCode] = useState("SELLER");
+  const [membershipPayments, setMembershipPayments] = useState<MembershipPayment[]>([]);
+  const [historyProgram, setHistoryProgram] = useState("");
+  const [historyState, setHistoryState] = useState("");
+  const [historyOffset, setHistoryOffset] = useState(0);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const historyLimit = 50;
   const [rules, setRules] = useState<Rule[]>([]);
   const [ruleForm, setRuleForm] = useState<RuleForm>(emptyRule);
   const [editingRule, setEditingRule] = useState<string | null>(null);
   const [programForms, setProgramForms] = useState<Record<string, {
     displayName: string; description: string; enabled: boolean;
     monthlyPriceMinor: string; annualPriceMinor: string;
-    currency: string; termsVersion: string;
+    currency: string; validityDuration: string; validityUnit: string;
+    termsVersion: string; termsAndConditions: string;
   }>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+
+  const loadPaymentHistory = useCallback(async () => {
+    const params = new URLSearchParams();
+    if (historyProgram) params.set("programCode", historyProgram);
+    if (historyState) params.set("state", historyState);
+    params.set("limit", String(historyLimit));
+    params.set("offset", String(historyOffset));
+    const query = params.toString();
+    const suffix = query ? `?${query}` : "";
+    try {
+      const page = await fetchJson<MembershipPaymentPage>(
+        `/admin/fees/membership-payments${suffix}`,
+      );
+      setMembershipPayments(page.items);
+      setHistoryTotal(page.total);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not load membership payment history.");
+    }
+  }, [historyLimit, historyOffset, historyProgram, historyState]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -51,7 +93,11 @@ function FeesWorkspace() {
         enabled: item.enabled,
         monthlyPriceMinor: item.monthlyPriceMinor == null ? "" : String(Number(item.monthlyPriceMinor) / 100),
         annualPriceMinor: item.annualPriceMinor == null ? "" : String(Number(item.annualPriceMinor) / 100),
-        currency: item.currency, termsVersion: item.termsVersion,
+        currency: item.currency,
+        validityDuration: item.validityDuration == null ? "" : String(item.validityDuration),
+        validityUnit: item.validityUnit ?? "",
+        termsVersion: item.termsVersion,
+        termsAndConditions: item.termsAndConditions ?? "",
       }])));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not load fee settings.");
@@ -61,6 +107,7 @@ function FeesWorkspace() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void loadPaymentHistory(); }, [loadPaymentHistory]);
 
   async function saveProgram(code: string) {
     const form = programForms[code];
@@ -127,7 +174,7 @@ function FeesWorkspace() {
         <p className="text-sm font-semibold text-teal-700">CHIMZO · SUPER ADMIN</p>
         <h1 className="mt-1 text-2xl font-bold text-[#08205B]">Fees & membership</h1>
         <p className="mt-2 text-sm text-slate-600">
-          Configure membership prices and platform fee definitions. Enter membership prices in naira (?) or dollars ($); CHIMZO converts them automatically when saving.
+          Configure each membership program, its terms and prices, and platform fee definitions. Enter membership prices in major currency units; CHIMZO stores them in minor units.
         </p>
       </header>
 
@@ -136,15 +183,50 @@ function FeesWorkspace() {
 
       <section className="space-y-4">
         <h2 className="text-lg font-bold text-slate-900">Membership programs</h2>
-        <div className="grid gap-4 lg:grid-cols-3">
-          {programs.map((program) => {
-            const form = programForms[program.programCode];
-            if (!form) return null;
+        <div role="tablist" aria-label="Membership program configuration" className="flex flex-wrap gap-2">
+          {([
+            ["SELLER", "Seller Membership"],
+            ["WHOLESALER", "Wholesaler Membership"],
+            ["DISTRIBUTOR", "Distributor Membership"],
+          ] as const).map(([code, label]) => (
+            <button
+              key={code}
+              type="button"
+              role="tab"
+              aria-selected={activeProgramCode === code}
+              onClick={() => setActiveProgramCode(code)}
+              className={`rounded-lg px-4 py-2 text-sm font-semibold ${activeProgramCode === code ? "bg-[#08205B] text-white" : "border border-slate-300 bg-white text-slate-700"}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {(() => {
+            const program = programs.find((item) => item.programCode === activeProgramCode);
+            const form = program ? programForms[program.programCode] : undefined;
+            if (!program || !form) {
+              return <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                {activeProgramCode} configuration is not present in the database. Apply the membership configuration migration before configuring this program.
+              </p>;
+            }
             const set = (key: keyof typeof form, value: string | boolean) =>
               setProgramForms((current) => ({ ...current, [program.programCode]: { ...current[program.programCode], [key]: value } }));
             return (
-              <article key={program.id} className="space-y-3 rounded-2xl border border-slate-200 bg-white p-5">
-                <h3 className="font-bold text-[#08205B]">{program.displayName}</h3>
+              <article key={program.id} role="tabpanel" className="max-w-3xl space-y-3 rounded-2xl border border-slate-200 bg-white p-5">
+                <h3 className="font-bold text-[#08205B]">{activeProgramCode === "SELLER" ? "Seller Membership" : activeProgramCode === "WHOLESALER" ? "Wholesaler Membership" : "Distributor Membership"}</h3>
+                <aside className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-950">
+                  <p className="font-semibold">Eligibility and upgrade requirements (enforced by the API)</p>
+                  <p className="mt-1">
+                    {program.programCode === "SELLER"
+                      ? "A customer must accept the current Seller terms and complete a verified successful Seller payment. Seller application approval and verified KYC are required before upgrading."
+                      : program.programCode === "WHOLESALER"
+                        ? "An existing Seller account must be approved, KYC-verified, and have active Seller membership with current terms accepted. Wholesaler terms and a verified successful Wholesaler payment are also required."
+                        : "An existing approved Wholesaler account must have verified KYC and active Seller and Wholesaler memberships with current terms accepted. Distributor terms and a verified successful Distributor payment are also required."}
+                  </p>
+                  <p className="mt-1 text-xs">
+                    The CUSTOMER → SELLER → WHOLESALER → DISTRIBUTOR sequence is mandatory and cannot be bypassed by changing program prices or terms.
+                  </p>
+                </aside>
                 <label className="block text-sm">Display name
                   <input className="mt-1 w-full rounded-lg border p-2" value={form.displayName} onChange={(e) => set("displayName", e.target.value)} required maxLength={120} />
                 </label>
@@ -156,14 +238,25 @@ function FeesWorkspace() {
                     <option value="NGN">NGN</option><option value="USD">USD</option>
                   </select>
                 </label>
-                <label className="block text-sm">{form.currency === "NGN" ? "Monthly price (?)" : "Monthly price ($)"}
+                <label className="block text-sm">Monthly price ({form.currency})
                   <input type="number" min="0" step="0.01" className="mt-1 w-full rounded-lg border p-2" value={form.monthlyPriceMinor} onChange={(e) => set("monthlyPriceMinor", e.target.value)} />
                 </label>
-                <label className="block text-sm">{form.currency === "NGN" ? "Annual price (?)" : "Annual price ($)"}
+                <label className="block text-sm">Annual price ({form.currency})
                   <input type="number" min="0" step="0.01" className="mt-1 w-full rounded-lg border p-2" value={form.annualPriceMinor} onChange={(e) => set("annualPriceMinor", e.target.value)} />
+                </label>
+                <label className="block text-sm">Membership duration (optional; blank means no expiry)
+                  <input type="number" min="1" step="1" className="mt-1 w-full rounded-lg border p-2" value={form.validityDuration} onChange={(e) => set("validityDuration", e.target.value)} />
+                </label>
+                <label className="block text-sm">Duration unit
+                  <select className="mt-1 w-full rounded-lg border p-2" value={form.validityUnit} onChange={(e) => set("validityUnit", e.target.value)}>
+                    <option value="">No expiry</option><option value="DAY">Days</option><option value="WEEK">Weeks</option><option value="MONTH">Months</option><option value="YEAR">Years</option>
+                  </select>
                 </label>
                 <label className="block text-sm">Terms version
                   <input className="mt-1 w-full rounded-lg border p-2" value={form.termsVersion} onChange={(e) => set("termsVersion", e.target.value)} required maxLength={120} />
+                </label>
+                <label className="block text-sm">Membership terms and conditions
+                  <textarea className="mt-1 min-h-36 w-full rounded-lg border p-2" value={form.termsAndConditions} onChange={(e) => set("termsAndConditions", e.target.value)} maxLength={20000} />
                 </label>
                 <label className="flex items-center gap-2 text-sm">
                   <input type="checkbox" checked={form.enabled} onChange={(e) => set("enabled", e.target.checked)} />
@@ -172,9 +265,71 @@ function FeesWorkspace() {
                 <button disabled={saving} onClick={() => void saveProgram(program.programCode)} className="rounded-lg bg-[#08205B] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
                   Save membership
                 </button>
+                <p className="text-xs text-slate-500">
+                  Last updated: {program.updatedAt ? new Date(program.updatedAt).toLocaleString() : "Not recorded"}
+                  {" · "}
+                  Administrator: {program.updatedByEmail ?? program.updatedByPhone ?? program.updatedByUserId ?? "Not recorded"}
+                </p>
               </article>
             );
-          })}
+        })()}
+      </section>
+
+      <section className="space-y-4">
+        <h2 className="text-lg font-bold text-slate-900">Membership payment history</h2>
+        <div className="flex flex-wrap gap-3">
+          <label className="text-sm">Program
+            <select className="ml-2 rounded-lg border p-2" value={historyProgram} onChange={(event) => { setHistoryProgram(event.target.value); setHistoryOffset(0); }}>
+              <option value="">All programs</option>
+              <option value="SELLER">Seller</option>
+              <option value="WHOLESALER">Wholesaler</option>
+              <option value="DISTRIBUTOR">Distributor</option>
+            </select>
+          </label>
+          <label className="text-sm">Payment status
+            <select className="ml-2 rounded-lg border p-2" value={historyState} onChange={(event) => { setHistoryState(event.target.value); setHistoryOffset(0); }}>
+              <option value="">All statuses</option>
+              <option value="PENDING">Pending</option>
+              <option value="AUTHORIZED">Authorized</option>
+              <option value="SUCCESSFUL">Successful</option>
+              <option value="FAILED">Failed</option>
+              <option value="REFUNDED">Refunded</option>
+              <option value="CANCELLED">Cancelled</option>
+              <option value="UNKNOWN">Unknown</option>
+            </select>
+          </label>
+        </div>
+        <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+          <table className="min-w-full text-left text-sm">
+            <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+              <tr><th className="p-3">Date</th><th className="p-3">Program</th><th className="p-3">Account</th><th className="p-3">Amount</th><th className="p-3">Period</th><th className="p-3">Status</th><th className="p-3">Reference</th></tr>
+            </thead>
+            <tbody>
+              {membershipPayments.map((payment) => (
+                <tr key={payment.paymentId} className="border-t border-slate-100">
+                  <td className="whitespace-nowrap p-3">{new Date(payment.createdAt).toLocaleString()}</td>
+                  <td className="p-3">{payment.programName}</td>
+                  <td className="p-3">{payment.userEmail ?? payment.userId}</td>
+                  <td className="whitespace-nowrap p-3">{new Intl.NumberFormat(undefined, { style: "currency", currency: payment.currency }).format(Number(payment.amountMinor) / 100)}</td>
+                  <td className="p-3">{payment.billingPeriod}</td>
+                  <td className="p-3">{payment.state}</td>
+                  <td className="p-3">{payment.paymentReference}</td>
+                </tr>
+              ))}
+              {!membershipPayments.length && <tr><td className="p-4 text-slate-500" colSpan={7}>No membership payments match these filters.</td></tr>}
+            </tbody>
+          </table>
+          <div className="flex items-center justify-between gap-3 px-3 pb-3 text-xs text-slate-500">
+            <span>
+              {historyTotal === 0
+                ? "No matching payments"
+                : `Showing ${historyOffset + 1}–${Math.min(historyOffset + historyLimit, historyTotal)} of ${historyTotal}`}
+            </span>
+            <div className="flex gap-2">
+              <button type="button" disabled={historyOffset === 0} onClick={() => setHistoryOffset((offset) => Math.max(0, offset - historyLimit))} className="rounded border px-2 py-1 disabled:opacity-40">Previous</button>
+              <button type="button" disabled={historyOffset + historyLimit >= historyTotal} onClick={() => setHistoryOffset((offset) => offset + historyLimit)} className="rounded border px-2 py-1 disabled:opacity-40">Next</button>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -267,4 +422,3 @@ function FeesWorkspace() {
 export default function AdminFeesPage() {
   return <ProtectedRoute roles={["SUPER_ADMIN"]}><FeesWorkspace /></ProtectedRoute>;
 }
-

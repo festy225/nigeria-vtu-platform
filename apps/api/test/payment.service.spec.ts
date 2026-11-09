@@ -48,7 +48,7 @@ describe('PaymentService membership payments', () => {
   };
   const config = { get: jest.fn() };
   const providerSecretResolver = {
-    resolve: jest.fn().mockReturnValue('resolved-test-secret'),
+    resolveAsync: jest.fn().mockResolvedValue('resolved-test-secret'),
   };
   const walletService = { creditWithClient: jest.fn() };
   const marketplaceOrderService = {
@@ -89,7 +89,7 @@ const marketplaceCartService = {
     provider.verifyWebhook.mockReset();
     provider.parseWebhook.mockReset();
 
-    providerSecretResolver.resolve.mockReturnValue('resolved-test-secret');
+    providerSecretResolver.resolveAsync.mockResolvedValue('resolved-test-secret');
     db.withTransaction.mockImplementation(
       (work: (value: typeof client) => unknown) => work(client),
     );
@@ -483,6 +483,31 @@ const marketplaceCartService = {
     );
   });
 
+  it('keeps membership payment status as a read-only lookup', async () => {
+    const getMembershipPaymentStatus = jest.fn().mockResolvedValue({
+      payment: { id: 'payment-id', state: 'PENDING' },
+    });
+    const controller = new PaymentController({
+      getMembershipPaymentStatus,
+    } as never);
+    const user = {
+      id: 'authenticated-customer-id',
+      email: 'customer@example.test',
+      phone: null,
+      roles: ['CUSTOMER' as const],
+    };
+
+    await expect(
+      controller.getMembershipPaymentStatus(user, 'payment-id'),
+    ).resolves.toMatchObject({ payment: { state: 'PENDING' } });
+
+    expect(getMembershipPaymentStatus).toHaveBeenCalledWith(
+      user.id,
+      'payment-id',
+    );
+    expect(getMembershipPaymentStatus).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps wallet funding deposit-backed without supplying a membership program', async () => {
     client.query
       .mockResolvedValueOnce({ rows: [] })
@@ -562,10 +587,13 @@ const marketplaceCartService = {
     expect(provider.initializePayment).not.toHaveBeenCalled();
   });
 
-  it('rejects a disabled membership program without creating a payment', async () => {
+  it.each(['SELLER', 'WHOLESALER', 'DISTRIBUTOR'])(
+    'rejects a disabled %s program without creating a payment',
+    async (programCode) => {
     client.query.mockResolvedValueOnce({
       rows: [{
         id: validRequest.membershipProgramId,
+        program_code: programCode,
         enabled: false,
         monthly_price_minor: '1500',
         annual_price_minor: '12000',
@@ -583,16 +611,72 @@ const marketplaceCartService = {
 
     expect(client.query).toHaveBeenCalledTimes(1);
     expect(provider.initializePayment).not.toHaveBeenCalled();
+    },
+  );
+
+  it('requires acceptance of the current membership terms before creating a payment', async () => {
+    client.query.mockResolvedValueOnce({
+      rows: [{
+        id: validRequest.membershipProgramId,
+        program_code: 'SELLER',
+        enabled: true,
+        monthly_price_minor: '1500',
+        annual_price_minor: '12000',
+        currency: 'USD',
+        terms_accepted: false,
+      }],
+    });
+
+    await expect(
+      service.createMembershipPaymentIntent(
+        'user-id',
+        'user@example.test',
+        validRequest,
+      ),
+    ).rejects.toThrow(ForbiddenException);
+    expect(client.query).toHaveBeenCalledTimes(1);
+    expect(provider.initializePayment).not.toHaveBeenCalled();
+  });
+
+  it('requires an eligible paid Seller account before purchasing Wholesaler membership', async () => {
+    client.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: validRequest.membershipProgramId,
+          program_code: 'WHOLESALER',
+          enabled: true,
+          monthly_price_minor: '1500',
+          annual_price_minor: '12000',
+          currency: 'USD',
+          terms_configured: true,
+          terms_accepted: true,
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [{ eligible: false }] });
+
+    await expect(
+      service.createMembershipPaymentIntent(
+        'user-id',
+        'user@example.test',
+        validRequest,
+      ),
+    ).rejects.toThrow(ForbiddenException);
+    expect(client.query.mock.calls[1]?.[0]).toContain("payment.state = 'SUCCESSFUL'");
+    expect(client.query.mock.calls[1]?.[0]).toContain("seller.onboarding_status = 'APPROVED'");
+    expect(provider.initializePayment).not.toHaveBeenCalled();
   });
 
   it('rejects a billing period without a configured price', async () => {
     client.query.mockResolvedValueOnce({
       rows: [{
         id: validRequest.membershipProgramId,
+        program_code: 'SELLER',
         enabled: true,
         monthly_price_minor: '1500',
         annual_price_minor: null,
         currency: 'USD',
+        terms_configured: true,
+        terms_accepted: true,
       }],
     });
 
@@ -613,10 +697,13 @@ const marketplaceCartService = {
       .mockResolvedValueOnce({
         rows: [{
           id: validRequest.membershipProgramId,
+          program_code: 'SELLER',
           enabled: true,
           monthly_price_minor: '1500',
           annual_price_minor: '12000',
           currency: 'USD',
+          terms_configured: true,
+          terms_accepted: true,
         }],
       })
       .mockResolvedValueOnce({ rows: [] })
@@ -678,18 +765,84 @@ const marketplaceCartService = {
     expect((client.query.mock.calls as QueryCall[]).some(([query]) =>
       /entitlement/i.test(String(query)),
     )).toBe(false);
+    expect((client.query.mock.calls as QueryCall[]).some(([query]) =>
+      String(query).includes('INSERT INTO user_roles'),
+    )).toBe(false);
     expect(walletService.creditWithClient).not.toHaveBeenCalled();
   });
+
+  it.each(['SELLER', 'WHOLESALER', 'DISTRIBUTOR'])(
+    'does not create a new %s membership payment when its program is disabled',
+    async (programCode) => {
+      client.query.mockResolvedValueOnce({
+        rows: [{
+          id: validRequest.membershipProgramId,
+          program_code: programCode,
+          enabled: false,
+          monthly_price_minor: '1500',
+          annual_price_minor: '12000',
+          currency: 'NGN',
+          terms_configured: true,
+          terms_accepted: true,
+        }],
+      });
+
+      await expect(
+        service.createMembershipPaymentIntent(
+          'user-id',
+          'user@example.test',
+          validRequest,
+        ),
+      ).rejects.toThrow('Business membership program is not enabled');
+
+      expect(client.query).toHaveBeenCalledTimes(1);
+      expect(provider.initializePayment).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['WHOLESALER', 'DISTRIBUTOR'])(
+    'does not create a %s payment for an ineligible account',
+    async (programCode) => {
+      client.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: validRequest.membershipProgramId,
+            program_code: programCode,
+            enabled: true,
+            monthly_price_minor: '1500',
+            annual_price_minor: '12000',
+            currency: 'NGN',
+            terms_configured: true,
+            terms_accepted: true,
+          }],
+        })
+        .mockResolvedValueOnce({ rows: [{ eligible: false }] });
+
+      await expect(
+        service.createMembershipPaymentIntent(
+          'user-id',
+          'user@example.test',
+          validRequest,
+        ),
+      ).rejects.toThrow('membership requires');
+
+      expect(client.query).toHaveBeenCalledTimes(2);
+      expect(provider.initializePayment).not.toHaveBeenCalled();
+    },
+  );
 
   it('reuses the same membership payment for an identical idempotency request', async () => {
     client.query
       .mockResolvedValueOnce({
         rows: [{
           id: validRequest.membershipProgramId,
+          program_code: 'SELLER',
           enabled: true,
           monthly_price_minor: '1500',
           annual_price_minor: '12000',
           currency: 'USD',
+          terms_configured: true,
+          terms_accepted: true,
         }],
       })
       .mockResolvedValueOnce({
@@ -727,10 +880,13 @@ const marketplaceCartService = {
       .mockResolvedValueOnce({
         rows: [{
           id: validRequest.membershipProgramId,
+          program_code: 'SELLER',
           enabled: true,
           monthly_price_minor: '12000',
           annual_price_minor: '12000',
           currency: 'USD',
+          terms_configured: true,
+          terms_accepted: true,
         }],
       })
       .mockResolvedValueOnce({
@@ -769,10 +925,13 @@ const marketplaceCartService = {
       .mockResolvedValueOnce({
         rows: [{
           id: validRequest.membershipProgramId,
+          program_code: 'SELLER',
           enabled: true,
           monthly_price_minor: '1500',
           annual_price_minor: '12000',
           currency: 'USD',
+          terms_configured: true,
+          terms_accepted: true,
         }],
       })
       .mockResolvedValueOnce({
@@ -811,10 +970,13 @@ const marketplaceCartService = {
       .mockResolvedValueOnce({
         rows: [{
           id: validRequest.membershipProgramId,
+          program_code: 'SELLER',
           enabled: true,
           monthly_price_minor: '1500',
           annual_price_minor: '12000',
           currency: 'USD',
+          terms_configured: true,
+          terms_accepted: true,
         }],
       })
       .mockResolvedValueOnce({ rows: [] })
@@ -909,7 +1071,7 @@ const marketplaceCartService = {
     ...overrides,
   });
 
-  it('creates one ACTIVE entitlement for a verified successful membership payment', async () => {
+  it('preserves a paid membership payment and grants its entitlement after program fee changes', async () => {
     configureWebhook('SUCCESS');
     client.query
       .mockResolvedValueOnce({ rows: [webhookPayment()] })
@@ -927,6 +1089,8 @@ const marketplaceCartService = {
     expect(String(queryCalls[3]?.[0])).toContain(
       'INSERT INTO business_membership_entitlements',
     );
+    expect(String(queryCalls[2]?.[0])).toContain('SELECT validity_duration, validity_unit');
+    expect(String(queryCalls[2]?.[0])).not.toMatch(/monthly_price_minor|annual_price_minor/);
     expect(String(queryCalls[3]?.[0])).toContain("'ACTIVE'");
     expect(String(queryCalls[3]?.[0])).toContain(
       'make_interval(months => $4::integer)',
@@ -1000,6 +1164,80 @@ const marketplaceCartService = {
     expect(walletService.creditWithClient).not.toHaveBeenCalled();
   });
 
+  it('does not settle a membership payment when the webhook signature is invalid', async () => {
+    configureWebhook('SUCCESS');
+    provider.verifyWebhook.mockResolvedValueOnce({
+      valid: false,
+      rawPayload: {},
+    });
+    client.query.mockResolvedValueOnce({
+      rows: [webhookPayment()],
+    });
+
+    await expect(
+      service.completeFromWebhook(webhookPayload()),
+    ).rejects.toThrow(BadRequestException);
+
+    expect(provider.parseWebhook).not.toHaveBeenCalled();
+    expect(client.query).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['payment reference', { paymentReference: 'PAY-other' }, BadRequestException],
+    ['provider reference', { providerReference: 'provider-other' }, ConflictException],
+    ['amount', { amountMinor: 12001 }, ConflictException],
+    ['currency', { currency: 'NGN' }, ConflictException],
+  ])(
+    'does not settle a membership payment when the %s does not match',
+    async (_field, eventOverrides, expectedError) => {
+      configureWebhook('SUCCESS');
+      provider.parseWebhook.mockReturnValue({
+        providerName: provider.name,
+        eventId: 'event-id',
+        eventType: 'payment.success',
+        paymentReference: 'PAY-membership',
+        providerReference: 'provider-ref',
+        amountMinor: 12000,
+        currency: 'USD',
+        status: 'SUCCESS',
+        metadata: {},
+        rawPayload: { eventId: 'event-id' },
+        ...eventOverrides,
+      });
+      client.query.mockResolvedValueOnce({
+        rows: [webhookPayment()],
+      });
+
+      await expect(
+        service.completeFromWebhook(webhookPayload()),
+      ).rejects.toThrow(expectedError);
+
+      expect(client.query).toHaveBeenCalledTimes(1);
+      expect((client.query.mock.calls as QueryCall[]).some(([query]) =>
+        String(query).includes('business_membership_entitlements'),
+      )).toBe(false);
+    },
+  );
+
+  it.each(['FAILED', 'CANCELLED', 'REFUNDED'])(
+    'does not revive a terminal %s membership payment on a later success webhook',
+    async (paymentState) => {
+      configureWebhook('SUCCESS');
+      client.query.mockResolvedValueOnce({
+        rows: [webhookPayment(paymentState)],
+      });
+
+      await expect(
+        service.completeFromWebhook(webhookPayload()),
+      ).rejects.toThrow(ConflictException);
+
+      expect(client.query).toHaveBeenCalledTimes(1);
+      expect((client.query.mock.calls as QueryCall[]).some(([query]) =>
+        String(query).includes('business_membership_entitlements'),
+      )).toBe(false);
+    },
+  );
+
   it('reconciles a stale initializing marketplace payment when lookup confirms success', async () => {
     const candidate = {
       payment_id: 'payment-id',
@@ -1070,7 +1308,7 @@ const marketplaceCartService = {
       amountMinor: 12000,
       currency: 'USD',
     });
-    expect(providerSecretResolver.resolve).toHaveBeenCalledWith(
+    expect(providerSecretResolver.resolveAsync).toHaveBeenCalledWith(
       'configured-secret-reference',
     );
     expect(
@@ -1724,7 +1962,7 @@ it('skips settlement if the payment has already changed before recovery locks it
       providers.getProviderRegistrationByConfigurationId,
     ).toHaveBeenCalledWith('provider-configuration-id');
     expect(providers.getProvider).not.toHaveBeenCalled();
-    expect(providerSecretResolver.resolve).toHaveBeenCalledWith(
+    expect(providerSecretResolver.resolveAsync).toHaveBeenCalledWith(
       'configured-secret-reference',
     );
 expect(provider.verifyWebhook).toHaveBeenCalledWith(

@@ -16,7 +16,14 @@ describe('ProviderManagementController configuration responses', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    controller = new ProviderManagementController(registry as never);
+    controller = new ProviderManagementController(
+      registry as never,
+      {
+        getSecretStatus: jest.fn(),
+        saveSecret: jest.fn(),
+      } as never,
+      { record: jest.fn() } as never,
+    );
   });
 
   it('redacts nested credential-like keys while preserving ordinary settings', () => {

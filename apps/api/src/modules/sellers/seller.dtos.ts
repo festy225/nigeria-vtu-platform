@@ -8,8 +8,8 @@ import {
 } from 'class-validator';
 
 export class CreateSellerApplicationDto {
-  @IsIn(['RETAILER', 'VENDOR', 'WHOLESALER', 'DISTRIBUTOR'])
-  sellerType!: 'RETAILER' | 'VENDOR' | 'WHOLESALER' | 'DISTRIBUTOR';
+  @IsIn(['RETAILER', 'VENDOR'])
+  sellerType!: 'RETAILER' | 'VENDOR';
 
   @IsString()
   @Length(2, 200)

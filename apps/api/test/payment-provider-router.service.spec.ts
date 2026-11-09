@@ -20,7 +20,7 @@ describe('PaymentProviderRouterService', () => {
     findRegistrations: jest.fn(),
   };
   const secrets = {
-    resolve: jest.fn().mockReturnValue('test-provider-secret'),
+    resolveAsync: jest.fn().mockResolvedValue('test-provider-secret'),
   };
   const router = new PaymentProviderRouterService(
     registry as never,
@@ -70,7 +70,7 @@ describe('PaymentProviderRouterService', () => {
     jest.clearAllMocks();
     registry.findEnabledServiceId.mockResolvedValue(null);
     registry.findRegistrations.mockResolvedValue([]);
-    secrets.resolve.mockReturnValue('test-provider-secret');
+    secrets.resolveAsync.mockResolvedValue('test-provider-secret');
   });
 
   it('allows the mock adapter in development', async () => {
@@ -199,7 +199,7 @@ describe('PaymentProviderRouterService', () => {
   });
 
   it('rejects provider selection when configured credentials cannot be resolved', async () => {
-    secrets.resolve.mockImplementationOnce(() => {
+    secrets.resolveAsync.mockImplementationOnce(() => {
       throw new ServiceUnavailableException(
         'Provider credentials are not configured',
       );
@@ -211,7 +211,7 @@ describe('PaymentProviderRouterService', () => {
     await expect(router.getProviderRegistration()).rejects.toBeInstanceOf(
       ServiceUnavailableException,
     );
-    expect(secrets.resolve).toHaveBeenCalledWith(
+    expect(secrets.resolveAsync).toHaveBeenCalledWith(
       'configured-secret-reference',
     );
   });
@@ -224,7 +224,7 @@ describe('PaymentProviderRouterService', () => {
     const selected = await router.getProviderRegistration();
 
     expect(selected.provider).toBe(adapter);
-    expect(secrets.resolve).toHaveBeenCalledWith(
+    expect(secrets.resolveAsync).toHaveBeenCalledWith(
       'configured-secret-reference',
     );
   });

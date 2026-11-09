@@ -43,8 +43,10 @@ function paymentState(status: SellerMembershipPaymentStatus) {
 
 export default function SellerMembershipGate({
   onVerified,
+  programCode = 'SELLER',
 }: {
-  onVerified: () => void;
+  onVerified: () => void | Promise<void>;
+  programCode?: 'SELLER' | 'WHOLESALER' | 'DISTRIBUTOR';
 }) {
   const [program, setProgram] = useState<SellerMembershipProgram | null>(null);
   const [period, setPeriod] = useState<BillingPeriod>('MONTHLY');
@@ -57,16 +59,27 @@ export default function SellerMembershipGate({
   const [verifyRestoredPayment, setVerifyRestoredPayment] = useState(false);
   const restoredVerificationStarted = useRef(false);
   const paymentCheckInFlight = useRef(false);
+  const paymentStorageKey = programCode === 'SELLER'
+    ? SELLER_MEMBERSHIP_PAYMENT_STORAGE_KEY
+    : `${SELLER_MEMBERSHIP_PAYMENT_STORAGE_KEY}:${programCode.toLowerCase()}`;
+  const membershipLabel = programCode === 'WHOLESALER'
+    ? 'wholesaler membership'
+    : programCode === 'DISTRIBUTOR'
+      ? 'distributor membership'
+      : 'seller membership';
 
   const priceMinor = useMemo(
     () => program ? getPrice(program, period) : 0,
     [program, period],
   );
+  const hasConfiguredTerms = Boolean(
+    (program?.termsAndConditions ?? program?.terms_and_conditions ?? '').trim(),
+  );
 
   useEffect(() => {
     try {
       const savedPaymentId = window.sessionStorage.getItem(
-        SELLER_MEMBERSHIP_PAYMENT_STORAGE_KEY,
+        paymentStorageKey,
       );
       if (savedPaymentId) {
         setPaymentId(savedPaymentId);
@@ -76,7 +89,7 @@ export default function SellerMembershipGate({
     } catch {
       // Storage may be unavailable; payment verification remains server-side.
     }
-  }, []);
+  }, [paymentStorageKey]);
 
   useEffect(() => {
     let active = true;
@@ -84,10 +97,10 @@ export default function SellerMembershipGate({
       .then((programs) => {
         if (!active) return;
         const sellerProgram = programs.find(
-          (item) => getCode(item).toUpperCase() === 'SELLER',
+          (item) => getCode(item).toUpperCase() === programCode,
         );
         if (!sellerProgram) {
-          setError('The SELLER membership program is not enabled. Please contact support.');
+          setError(`The ${programCode} membership program is not enabled. Please contact support.`);
           return;
         }
         setProgram(sellerProgram);
@@ -101,7 +114,7 @@ export default function SellerMembershipGate({
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, []);
+  }, [programCode]);
 
   async function startPayment() {
     if (!program || !accepted || working) return;
@@ -122,7 +135,7 @@ export default function SellerMembershipGate({
       setPaymentId(id);
       try {
         window.sessionStorage.setItem(
-          SELLER_MEMBERSHIP_PAYMENT_STORAGE_KEY,
+          paymentStorageKey,
           id,
         );
       } catch {
@@ -156,15 +169,25 @@ export default function SellerMembershipGate({
       const result = await api.getSellerMembershipPaymentStatus(paymentId);
       const current = paymentState(result);
       if (['SUCCESS', 'SUCCESSFUL'].includes(current)) {
+        const eligible = programCode === 'SELLER'
+          ? (await api.activateSellerMembership()).active
+          : programCode === 'WHOLESALER'
+            ? (await api.activateWholesalerUpgrade()).active
+            : (await api.activateDistributorUpgrade()).active;
+
+        if (!eligible) {
+          setState('pending');
+          setError(`Payment is confirmed, but ${membershipLabel} activation is still processing. Please check again shortly.`);
+          return;
+        }
+
         setState('success');
         try {
-          window.sessionStorage.removeItem(
-            SELLER_MEMBERSHIP_PAYMENT_STORAGE_KEY,
-          );
+          window.sessionStorage.removeItem(paymentStorageKey);
         } catch {
           // Storage may be unavailable; server verification remains authoritative.
         }
-        onVerified();
+        await onVerified();
         return;
       }
       if (['FAILED', 'CANCELLED', 'EXPIRED', 'REVERSED'].includes(current)) {
@@ -181,7 +204,7 @@ export default function SellerMembershipGate({
       paymentCheckInFlight.current = false;
       setWorking(false);
     }
-  }, [paymentId, working, onVerified]);
+  }, [membershipLabel, onVerified, paymentId, paymentStorageKey, programCode, working]);
 
   // seller-payment-return-auto-check: verify a payment restored after returning to CHIMZO.
   useEffect(() => {
@@ -216,9 +239,19 @@ export default function SellerMembershipGate({
     <div className="space-y-6">
       <header>
         <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#155EEF]">Business</p>
-        <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">Seller membership</h1>
+        <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">
+          {programCode === 'WHOLESALER'
+            ? 'Become a Wholesaler'
+            : programCode === 'DISTRIBUTOR'
+              ? 'Become a Distributor'
+              : 'Seller membership'}
+        </h1>
         <p className="mt-2 max-w-xl text-sm leading-6 text-slate-500">
-          Complete the configured membership payment before submitting your seller application.
+          {programCode === 'WHOLESALER'
+            ? 'Upgrade your approved seller account using the configured wholesaler membership. Your account changes only after CHIMZO verifies payment.'
+            : programCode === 'DISTRIBUTOR'
+              ? 'Upgrade your approved Wholesaler account using the configured Distributor membership. Your account changes only after CHIMZO verifies payment.'
+              : 'Complete the configured membership payment before submitting your seller application.'}
         </p>
       </header>
 
@@ -227,12 +260,22 @@ export default function SellerMembershipGate({
           <>
             <h2 className="text-lg font-bold">{getName(program)}</h2>
             {program.description && <p className="mt-2 text-sm text-slate-600">{program.description}</p>}
+            {(program.termsAndConditions ?? program.terms_and_conditions) && (
+              <div className="mt-4 whitespace-pre-wrap rounded-xl bg-slate-50 p-4 text-sm leading-6 text-slate-700">
+                {program.termsAndConditions ?? program.terms_and_conditions}
+              </div>
+            )}
+            {!hasConfiguredTerms && (
+              <p role="alert" className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                Membership terms and conditions are not configured. Please contact support.
+              </p>
+            )}
             <div className="mt-5">
-              <label htmlFor="seller-billing-period" className="mb-2 block text-sm font-medium">
+                <label htmlFor={`${programCode.toLowerCase()}-billing-period`} className="mb-2 block text-sm font-medium">
                 Billing period
               </label>
               <select
-                id="seller-billing-period"
+                id={`${programCode.toLowerCase()}-billing-period`}
                 value={period}
                 onChange={(event) => setPeriod(event.target.value as BillingPeriod)}
                 disabled={working || Boolean(paymentId)}
@@ -257,7 +300,7 @@ export default function SellerMembershipGate({
                 className="mt-1"
               />
               <span>
-                I have read and accept the current seller membership terms.
+                I have read and accept the current {membershipLabel} terms.
                 {program.termsVersion ? ` Terms version: ${program.termsVersion}.` : ''}
               </span>
             </label>
@@ -274,7 +317,11 @@ export default function SellerMembershipGate({
 
         {state === 'success' && (
           <p className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-            Payment is confirmed. Continue to the seller application.
+            {programCode === 'WHOLESALER'
+              ? 'Payment is confirmed and the wholesaler upgrade is active.'
+              : programCode === 'DISTRIBUTOR'
+                ? 'Payment is confirmed and the distributor upgrade is active.'
+                : 'Payment is confirmed and Seller workspace access is active. Continue to the seller application.'}
           </p>
         )}
         {state === 'pending' && (
@@ -285,7 +332,7 @@ export default function SellerMembershipGate({
 
         <div className="mt-6 flex flex-wrap gap-3">
           {!paymentId ? (
-            <Button onClick={startPayment} disabled={!program || !accepted || working || priceMinor <= 0}>
+            <Button onClick={startPayment} disabled={!program || !hasConfiguredTerms || !accepted || working || priceMinor <= 0}>
               {working ? 'Starting payment...' : 'Accept terms and pay'}
             </Button>
           ) : (
@@ -299,9 +346,7 @@ export default function SellerMembershipGate({
               onClick={() => {
                 setPaymentId('');
                 try {
-                  window.sessionStorage.removeItem(
-                    SELLER_MEMBERSHIP_PAYMENT_STORAGE_KEY,
-                  );
+                  window.sessionStorage.removeItem(paymentStorageKey);
                 } catch {
                   // Storage may be unavailable.
                 }

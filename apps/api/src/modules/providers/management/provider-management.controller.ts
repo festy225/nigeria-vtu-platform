@@ -42,7 +42,7 @@ export function redactProviderConfiguration(value: unknown): unknown {
 
     for (const [key, item] of Object.entries(value)) {
       result[key] =
-        sensitiveKey.test(key) && !/(?:endpoint|url|uri)$/i.test(key)
+        sensitiveKey.test(key) && !/(?:endpoint|url|uri|secretref)$/i.test(key)
           ? '[REDACTED]'
           : redactProviderConfiguration(item);
     }

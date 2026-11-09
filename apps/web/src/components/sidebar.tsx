@@ -100,6 +100,10 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       (link.label !== 'Become a Seller' || !isSeller),
   );
 
+  if (pathname.startsWith('/dashboard/business/seller/dashboard')) {
+    return null;
+  }
+
   return (
     <aside className="sticky top-0 flex h-screen w-64 shrink-0 flex-col overflow-y-auto bg-[#073F35] px-4 py-6 text-white shadow-xl">
       <div className="rounded-2xl px-2 py-1">

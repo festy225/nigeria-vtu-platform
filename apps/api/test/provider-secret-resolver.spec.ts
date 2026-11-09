@@ -13,6 +13,7 @@ describe('ProviderSecretResolver', () => {
     };
     resolver = new ProviderSecretResolver(
       config as unknown as ConfigService,
+      { query: jest.fn() } as never,
     );
   });
 

@@ -91,6 +91,191 @@ export class SellerService {
     return result.rows[0]?.eligible ?? false;
   }
 
+  async activateSellerMembership(userId: string) {
+    return this.database.withTransaction(async (client) => {
+      const entitlement = await this.requireVerifiedMembership(
+        client,
+        userId,
+        'SELLER',
+      );
+      await this.grantMembershipRoles(client, userId, ['SELLER']);
+      await this.audit.record(
+        {
+          actorId: userId,
+          action: 'SELLER_MEMBERSHIP_ACTIVATED',
+          resourceType: 'USER',
+          resourceId: userId,
+          afterData: { membershipPaymentId: entitlement.payment_id },
+        },
+        client,
+      );
+      return { active: true, sellerType: 'SELLER' as const };
+    });
+  }
+
+  async activateWholesalerUpgrade(userId: string) {
+    return this.activateSellerUpgrade(userId, 'WHOLESALER');
+  }
+
+  async activateDistributorUpgrade(userId: string) {
+    return this.activateSellerUpgrade(userId, 'DISTRIBUTOR');
+  }
+
+  private async activateSellerUpgrade(
+    userId: string,
+    target: 'WHOLESALER' | 'DISTRIBUTOR',
+  ) {
+    return this.database.withTransaction(async (client) => {
+      const sellerResult = await client.query<{
+        id: string;
+        seller_type: string;
+        onboarding_status: string;
+        kyc_status: string;
+      }>(
+        `SELECT id, seller_type, onboarding_status, kyc_status
+         FROM marketplace_sellers
+         WHERE user_id = $1
+         FOR UPDATE`,
+        [userId],
+      );
+      const seller = sellerResult.rows[0];
+
+      if (!seller) {
+        throw new NotFoundException('Marketplace seller application not found');
+      }
+
+      if (
+        seller.onboarding_status !== 'APPROVED' ||
+        seller.kyc_status !== 'VERIFIED'
+      ) {
+        throw new ForbiddenException(
+          `${target === 'WHOLESALER' ? 'Wholesaler' : 'Distributor'} upgrades require an approved seller application and verified KYC`,
+        );
+      }
+
+      if (target === 'WHOLESALER') {
+        if (!['RETAILER', 'VENDOR', 'WHOLESALER', 'DISTRIBUTOR'].includes(seller.seller_type)) {
+          throw new ForbiddenException('A valid seller account is required for a Wholesaler upgrade');
+        }
+        await this.requireVerifiedMembership(client, userId, 'SELLER');
+      } else {
+        if (!['WHOLESALER', 'DISTRIBUTOR'].includes(seller.seller_type)) {
+          throw new ForbiddenException(
+            'Distributor upgrades require an existing Wholesaler account',
+          );
+        }
+        await this.requireVerifiedMembership(client, userId, 'SELLER');
+        await this.requireVerifiedMembership(client, userId, 'WHOLESALER');
+      }
+
+      const entitlement = await this.requireVerifiedMembership(
+        client,
+        userId,
+        target,
+      );
+      const roles = target === 'WHOLESALER'
+        ? ['SELLER', 'WHOLESALER']
+        : ['SELLER', 'WHOLESALER', 'DISTRIBUTOR'];
+      await this.grantMembershipRoles(client, userId, roles);
+
+      const nextSellerType = target === 'WHOLESALER' &&
+        seller.seller_type === 'DISTRIBUTOR'
+        ? 'DISTRIBUTOR'
+        : target;
+      if (seller.seller_type !== nextSellerType) {
+        await client.query(
+          `UPDATE marketplace_sellers
+           SET seller_type = $2, updated_at = now()
+           WHERE id = $1`,
+          [seller.id, nextSellerType],
+        );
+      }
+
+      await this.audit.record(
+        {
+          actorId: userId,
+          action: `${target}_UPGRADE_ACTIVATED`,
+          resourceType: 'MARKETPLACE_SELLER',
+          resourceId: seller.id,
+          beforeData: { sellerType: seller.seller_type },
+          afterData: {
+            sellerType: nextSellerType,
+            membershipPaymentId: entitlement.payment_id,
+          },
+        },
+        client,
+      );
+
+      return { active: true, sellerType: nextSellerType };
+    });
+  }
+
+  private async requireVerifiedMembership(
+    client: PoolClient,
+    userId: string,
+    programCode: 'SELLER' | 'WHOLESALER' | 'DISTRIBUTOR',
+  ): Promise<{ payment_id: string }> {
+    const result = await client.query<{ payment_id: string }>(
+      `SELECT payment.id AS payment_id
+       FROM business_membership_programs program
+       JOIN business_membership_entitlements entitlement
+         ON entitlement.membership_program_id = program.id
+       JOIN payments payment
+         ON payment.id = entitlement.payment_id
+        AND payment.user_id = entitlement.user_id
+        AND payment.membership_program_id = entitlement.membership_program_id
+       WHERE program.program_code = $2
+         AND entitlement.user_id = $1
+         AND entitlement.status = 'ACTIVE'
+         AND entitlement.starts_at <= now()
+         AND (entitlement.expires_at IS NULL OR entitlement.expires_at > now())
+         AND payment.purpose = 'BUSINESS_MEMBERSHIP'
+         AND payment.state = 'SUCCESSFUL'
+         AND EXISTS (
+           SELECT 1
+           FROM business_membership_terms_acceptances acceptance
+           WHERE acceptance.user_id = entitlement.user_id
+             AND acceptance.membership_program_id = program.id
+             AND acceptance.terms_version = program.terms_version
+         )
+       ORDER BY entitlement.created_at DESC
+       LIMIT 1
+       FOR UPDATE OF entitlement`,
+      [userId, programCode],
+    );
+    if (!result.rows[0]) {
+      throw new ForbiddenException(
+        `A successful ${programCode} membership payment and current terms acceptance are required`,
+      );
+    }
+    return result.rows[0];
+  }
+
+  private async grantMembershipRoles(
+    client: PoolClient,
+    userId: string,
+    roleCodes: string[],
+  ): Promise<void> {
+    const roles = await client.query<{ id: string; code: string }>(
+      `SELECT id, code::text AS code
+       FROM roles
+       WHERE code::text = ANY($1::text[])`,
+      [roleCodes],
+    );
+    const configured = new Set(roles.rows.map((role) => role.code));
+    const missing = roleCodes.filter((roleCode) => !configured.has(roleCode));
+    if (missing.length) {
+      throw new ConflictException(`${missing.join(', ')} role is not configured`);
+    }
+    await client.query(
+      `INSERT INTO user_roles (user_id, role_id)
+       SELECT $1, role.role_id
+       FROM unnest($2::uuid[]) AS role(role_id)
+       ON CONFLICT (user_id, role_id) DO NOTHING`,
+      [userId, roles.rows.map((role) => role.id)],
+    );
+  }
+
   async getSellerIdByUserId(userId: string): Promise<string> {
     const result = await this.database.query<{ id: string }>(
       `SELECT id
@@ -630,42 +815,78 @@ export class SellerService {
       );
     }
 
-    const result = await this.database.query(
-      `INSERT INTO marketplace_sellers (
-        user_id,
-        seller_type,
-        business_name,
-        store_name,
-        store_slug,
-        onboarding_status,
-        kyc_status,
-        risk_status
-      )
-      VALUES ($1, $2, $3, $4, $5, 'SUBMITTED', 'PENDING', 'NORMAL')
-      RETURNING
-        id,
-        user_id,
-        seller_type,
-        business_name,
-        store_name,
-        store_slug,
-        onboarding_status,
-        kyc_status,
-        risk_status,
-        reviewed_by,
-        reviewed_at,
-        created_at,
-        updated_at`,
-      [
-        userId,
-        dto.sellerType,
-        dto.businessName.trim(),
-        dto.storeName.trim(),
-        storeSlug,
-      ],
-    );
+    try {
+      const result = await this.database.query(
+        `INSERT INTO marketplace_sellers (
+          user_id,
+          seller_type,
+          business_name,
+          store_name,
+          store_slug,
+          onboarding_status,
+          kyc_status,
+          risk_status
+        )
+        VALUES ($1, $2, $3, $4, $5, 'SUBMITTED', 'PENDING', 'NORMAL')
+        RETURNING
+          id,
+          user_id,
+          seller_type,
+          business_name,
+          store_name,
+          store_slug,
+          onboarding_status,
+          kyc_status,
+          risk_status,
+          reviewed_by,
+          reviewed_at,
+          created_at,
+          updated_at`,
+        [
+          userId,
+          dto.sellerType,
+          dto.businessName.trim(),
+          dto.storeName.trim(),
+          storeSlug,
+        ],
+      );
 
-    return result.rows[0];
+      return result.rows[0];
+    } catch (error) {
+      const isUniqueViolation =
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        (error as { code?: unknown }).code === '23505';
+
+      if (!isUniqueViolation) {
+        throw error;
+      }
+
+      const existingApplication = await this.database.query(
+        `SELECT id FROM marketplace_sellers WHERE user_id = $1`,
+        [userId],
+      );
+
+      if (existingApplication.rowCount) {
+        throw new ConflictException(
+          'A marketplace seller application already exists for this account',
+        );
+      }
+
+      const existingSlug = await this.database.query(
+        `SELECT id FROM marketplace_sellers WHERE store_slug = $1`,
+        [storeSlug],
+      );
+
+      if (existingSlug.rowCount) {
+        throw new ConflictException(
+          'That store slug is already in use',
+        );
+      }
+
+      throw error;
+    }
   }
 
   async getApplication(userId: string) {
