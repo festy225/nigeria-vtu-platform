@@ -18,8 +18,6 @@ import {
 
 const sellerTypes: { value: SellerType; label: string }[] = [
   { value: 'RETAILER', label: 'Retailer' },
-  { value: 'WHOLESALER', label: 'Wholesaler' },
-  { value: 'DISTRIBUTOR', label: 'Distributor' },
 ];
 
 const applicationStatuses: {
@@ -109,6 +107,126 @@ function SellerApplicationsContent() {
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
   const [reviewErrors, setReviewErrors] = useState<Record<string, string>>({});
   const [reviewingApplicationId, setReviewingApplicationId] = useState<string | null>(null);
+  const [applicationDetails, setApplicationDetails] = useState<Record<string, SellerApplication>>({});
+  const [detailLoading, setDetailLoading] = useState<Record<string, boolean>>({});
+  const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
+  const [documentNotes, setDocumentNotes] = useState<Record<string, string>>({});
+  const [documentReviewErrors, setDocumentReviewErrors] = useState<Record<string, string>>({});
+  const [documentDownloadErrors, setDocumentDownloadErrors] = useState<Record<string, string>>({});
+  const [reviewingDocumentId, setReviewingDocumentId] = useState<string | null>(null);
+  const [downloadingDocumentId, setDownloadingDocumentId] = useState<string | null>(null);
+
+  async function loadApplicationDetails(applicationId: string) {
+    if (applicationDetails[applicationId] || detailLoading[applicationId]) return;
+
+    setDetailLoading((current) => ({ ...current, [applicationId]: true }));
+    setDetailErrors((current) => {
+      const next = { ...current };
+      delete next[applicationId];
+      return next;
+    });
+
+    try {
+      const result = await api.getAdminSellerApplication(applicationId);
+      setApplicationDetails((current) => ({ ...current, [applicationId]: result }));
+    } catch (caught) {
+      setDetailErrors((current) => ({
+        ...current,
+        [applicationId]: loadErrorMessage(caught),
+      }));
+    } finally {
+      setDetailLoading((current) => ({ ...current, [applicationId]: false }));
+    }
+  }
+
+  async function reviewApplicationDocument(
+    applicationId: string,
+    documentId: string,
+    decision: 'ACCEPTED' | 'REJECTED',
+  ) {
+    setReviewingDocumentId(documentId);
+    setDocumentReviewErrors((current) => {
+      const next = { ...current };
+      delete next[documentId];
+      return next;
+    });
+
+    try {
+      const updated = await api.reviewSellerApplicationDocument(
+        applicationId,
+        documentId,
+        {
+          decision,
+          note: documentNotes[documentId]?.trim() || undefined,
+        },
+      );
+
+      setApplicationDetails((current) => {
+        const detail = current[applicationId];
+        if (!detail) return current;
+
+        return {
+          ...current,
+          [applicationId]: {
+            ...detail,
+            documents: (detail.documents ?? []).map((document) =>
+              document.id === documentId ? updated : document,
+            ),
+          },
+        };
+      });
+
+      setDocumentNotes((current) => ({ ...current, [documentId]: '' }));
+    } catch (caught) {
+      setDocumentReviewErrors((current) => ({
+        ...current,
+        [documentId]:
+          caught instanceof ApiError
+            ? caught.errors?.[0] ?? caught.message
+            : 'Document review failed. Please try again.',
+      }));
+    } finally {
+      setReviewingDocumentId(null);
+    }
+  }
+
+  async function downloadApplicationDocument(
+    applicationId: string,
+    documentId: string,
+    filename: string,
+  ) {
+    setDownloadingDocumentId(documentId);
+    setDocumentDownloadErrors((current) => {
+      const next = { ...current };
+      delete next[documentId];
+      return next;
+    });
+
+    try {
+      const blob = await api.downloadSellerApplicationDocument(
+        applicationId,
+        documentId,
+      );
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (caught) {
+      setDocumentDownloadErrors((current) => ({
+        ...current,
+        [documentId]:
+          caught instanceof ApiError
+            ? caught.errors?.[0] ?? caught.message
+            : 'Document download failed. Please try again.',
+      }));
+    } finally {
+      setDownloadingDocumentId(null);
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -450,32 +568,240 @@ function SellerApplicationsContent() {
                       </section>
                     )}
 
-                    <details className="mt-4 border-t border-slate-800 pt-4">
-                      <summary className="cursor-pointer text-sm font-medium text-brand-300 outline-none hover:text-brand-200 focus-visible:ring-2 focus-visible:ring-brand-400">
-                        View application details
+                    <details
+                      className="mt-4 border-t border-slate-200 pt-4"
+                      onToggle={(event) => {
+                        if (event.currentTarget.open) {
+                          void loadApplicationDetails(application.id);
+                        }
+                      }}
+                    >
+                      <summary className="cursor-pointer text-sm font-semibold text-blue-700 hover:text-blue-800">
+                        View business profile and verification documents
                       </summary>
-                      <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
-                        <div className="min-w-0">
-                          <dt className="text-xs text-slate-500">
-                            Application ID
-                          </dt>
-                          <dd className="mt-1 break-all text-slate-300">
-                            {application.id}
-                          </dd>
+
+                      {detailLoading[application.id] && (
+                        <p className="mt-4 text-sm text-slate-600">
+                          Loading application details...
+                        </p>
+                      )}
+
+                      {detailErrors[application.id] && (
+                        <div className="mt-4 space-y-2">
+                          <p className="text-sm text-red-600" role="alert">
+                            {detailErrors[application.id]}
+                          </p>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            onClick={() => void loadApplicationDetails(application.id)}
+                          >
+                            Try again
+                          </Button>
                         </div>
-                        <div>
-                          <dt className="text-xs text-slate-500">Store slug</dt>
-                          <dd className="mt-1 break-all text-slate-300">
-                            {application.store_slug}
-                          </dd>
-                        </div>
-                        <div>
-                          <dt className="text-xs text-slate-500">Last updated</dt>
-                          <dd className="mt-1 text-slate-300">
-                            {formatDate(application.updated_at)}
-                          </dd>
-                        </div>
-                      </dl>
+                      )}
+
+                      {applicationDetails[application.id] && (() => {
+                        const detail = applicationDetails[application.id];
+
+                        return (
+                          <div className="mt-4 space-y-6">
+                            <dl className="grid gap-4 text-sm sm:grid-cols-2">
+                              <div>
+                                <dt className="text-xs text-slate-500">Application ID</dt>
+                                <dd className="mt-1 break-all text-slate-800">{detail.id}</dd>
+                              </div>
+                              <div>
+                                <dt className="text-xs text-slate-500">Store slug</dt>
+                                <dd className="mt-1 break-all text-slate-800">{detail.store_slug}</dd>
+                              </div>
+                              <div>
+                                <dt className="text-xs text-slate-500">Last updated</dt>
+                                <dd className="mt-1 text-slate-800">{formatDate(detail.updated_at)}</dd>
+                              </div>
+                              <div>
+                                <dt className="text-xs text-slate-500">Business registration</dt>
+                                <dd className="mt-1 text-slate-800">
+                                  {detail.business_registration_status || 'Not provided'}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="text-xs text-slate-500">CAC registration number</dt>
+                                <dd className="mt-1 text-slate-800">
+                                  {detail.cac_registration_number || 'Not provided'}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="text-xs text-slate-500">Business email</dt>
+                                <dd className="mt-1 break-all text-slate-800">
+                                  {detail.business_email || 'Not provided'}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="text-xs text-slate-500">Business phone</dt>
+                                <dd className="mt-1 text-slate-800">
+                                  {detail.business_phone || 'Not provided'}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="text-xs text-slate-500">Business address</dt>
+                                <dd className="mt-1 text-slate-800">
+                                  {detail.business_address || 'Not provided'}
+                                </dd>
+                              </div>
+                              <div className="sm:col-span-2">
+                                <dt className="text-xs text-slate-500">Business description</dt>
+                                <dd className="mt-1 whitespace-pre-wrap text-slate-800">
+                                  {detail.business_description || 'Not provided'}
+                                </dd>
+                              </div>
+                              <div className="sm:col-span-2">
+                                <dt className="text-xs text-slate-500">Products and services</dt>
+                                <dd className="mt-1 whitespace-pre-wrap text-slate-800">
+                                  {detail.products_services_description || 'Not provided'}
+                                </dd>
+                              </div>
+                              <div className="sm:col-span-2">
+                                <dt className="text-xs text-slate-500">Product categories</dt>
+                                <dd className="mt-1 text-slate-800">
+                                  {detail.product_categories?.join(', ') || 'Not provided'}
+                                </dd>
+                              </div>
+                            </dl>
+
+                            <section className="space-y-4 border-t border-slate-200 pt-4">
+                              <h3 className="font-semibold text-slate-900">
+                                Verification documents ({detail.documents?.length ?? 0})
+                              </h3>
+
+                              {!detail.documents?.length ? (
+                                <p className="text-sm text-slate-600">
+                                  No documents have been uploaded for this application.
+                                </p>
+                              ) : (
+                                detail.documents.map((document) => (
+                                  <div
+                                    key={document.id}
+                                    className="space-y-3 rounded-lg border border-slate-200 p-4"
+                                  >
+                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                      <div className="min-w-0">
+                                        <p className="break-words text-sm font-semibold text-slate-900">
+                                          {document.document_type.replace(/_/g, ' ')}
+                                        </p>
+                                        <p className="mt-1 break-all text-sm text-slate-700">
+                                          {document.original_filename}
+                                        </p>
+                                        <p className="mt-1 text-xs text-slate-500">
+                                          {document.mime_type} · {Math.ceil(document.size_bytes / 1024)} KB · Uploaded {formatDate(document.uploaded_at)}
+                                        </p>
+                                      </div>
+                                      <Badge tone={
+                                        document.verification_status === 'ACCEPTED'
+                                          ? 'success'
+                                          : document.verification_status === 'REJECTED'
+                                            ? 'danger'
+                                            : 'warning'
+                                      }>
+                                        {document.verification_status}
+                                      </Badge>
+                                    </div>
+
+                                    {document.reviewer_note && (
+                                      <p className="text-sm text-slate-600">
+                                        Reviewer note: {document.reviewer_note}
+                                      </p>
+                                    )}
+
+                                    {document.reviewed_at && (
+                                      <p className="text-xs text-slate-500">
+                                        Reviewed: {formatDate(document.reviewed_at)}
+                                      </p>
+                                    )}
+
+                                    {documentDownloadErrors[document.id] && (
+                                      <p className="text-sm text-red-600" role="alert">
+                                        {documentDownloadErrors[document.id]}
+                                      </p>
+                                    )}
+
+                                    {documentReviewErrors[document.id] && (
+                                      <p className="text-sm text-red-600" role="alert">
+                                        {documentReviewErrors[document.id]}
+                                      </p>
+                                    )}
+
+                                    <Button
+                                      type="button"
+                                      variant="secondary"
+                                      disabled={downloadingDocumentId === document.id}
+                                      onClick={() => void downloadApplicationDocument(
+                                        application.id,
+                                        document.id,
+                                        document.original_filename,
+                                      )}
+                                    >
+                                      {downloadingDocumentId === document.id
+                                        ? 'Downloading...'
+                                        : 'Download document'}
+                                    </Button>
+
+                                    {document.verification_status === 'PENDING' && (
+                                      <div className="space-y-3 border-t border-slate-100 pt-3">
+                                        <label
+                                          htmlFor={`document-note-${document.id}`}
+                                          className="label"
+                                        >
+                                          Review note (optional)
+                                        </label>
+                                        <textarea
+                                          id={`document-note-${document.id}`}
+                                          className="input min-h-20"
+                                          maxLength={2000}
+                                          value={documentNotes[document.id] ?? ''}
+                                          disabled={reviewingDocumentId === document.id}
+                                          onChange={(event) => setDocumentNotes((current) => ({
+                                            ...current,
+                                            [document.id]: event.target.value,
+                                          }))}
+                                          placeholder="Explain the decision or identify any issue with this document..."
+                                        />
+                                        <div className="flex flex-wrap gap-2">
+                                          <Button
+                                            type="button"
+                                            disabled={reviewingDocumentId !== null}
+                                            onClick={() => void reviewApplicationDocument(
+                                              application.id,
+                                              document.id,
+                                              'ACCEPTED',
+                                            )}
+                                          >
+                                            {reviewingDocumentId === document.id
+                                              ? 'Saving...'
+                                              : 'Accept document'}
+                                          </Button>
+                                          <Button
+                                            type="button"
+                                            variant="secondary"
+                                            disabled={reviewingDocumentId !== null}
+                                            onClick={() => void reviewApplicationDocument(
+                                              application.id,
+                                              document.id,
+                                              'REJECTED',
+                                            )}
+                                          >
+                                            Reject document
+                                          </Button>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                ))
+                              )}
+                            </section>
+                          </div>
+                        );
+                      })()}
                     </details>
                   </Card>
                 ))}

@@ -588,6 +588,44 @@ export async function authenticatedFetch<T>(path: string, init: RequestInit = {}
   }
 }
 
+async function fetchBlob(path: string): Promise<Blob> {
+  const accessToken = typeof window !== 'undefined'
+    ? window.sessionStorage.getItem('vtu_access_token')
+    : null;
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    credentials: 'include',
+    headers: {
+      Accept: '*/*',
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    },
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as ApiEnvelope<unknown>;
+    throw new ApiError(response.status, body.message ?? 'Document download failed', body.errors);
+  }
+  return response.blob();
+}
+
+async function authenticatedBlobFetch(path: string): Promise<Blob> {
+  try {
+    return await fetchBlob(path);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) {
+      const session = readAuthStorage();
+      if (session?.refreshToken) {
+        try {
+          const refreshed = await api.refresh(session.refreshToken);
+          writeAuthStorage(refreshed);
+          return await fetchBlob(path);
+        } catch {
+          clearAuthStorage();
+        }
+      }
+    }
+    throw error;
+  }
+}
+
 export const api = {
   login: (payload: { identifier: string; password: string }) =>
     fetchJson<AuthSessionResponse>('/auth/login', {
@@ -785,6 +823,26 @@ passwordResetConfirm: (token: string, password: string) =>
       { method: 'POST', body: form },
     );
   },
+
+  getAdminSellerApplication: (applicationId: string) =>
+    authenticatedFetch<SellerApplication>(
+      `/sellers/applications/${encodeURIComponent(applicationId)}`,
+    ),
+
+  downloadSellerApplicationDocument: (applicationId: string, documentId: string) =>
+    authenticatedBlobFetch(
+      `/sellers/applications/${encodeURIComponent(applicationId)}/documents/${encodeURIComponent(documentId)}/download`,
+    ),
+
+  reviewSellerApplicationDocument: (
+    applicationId: string,
+    documentId: string,
+    payload: { decision: 'ACCEPTED' | 'REJECTED'; note?: string },
+  ) =>
+    authenticatedFetch<SellerApplicationDocument>(
+      `/sellers/applications/${encodeURIComponent(applicationId)}/documents/${encodeURIComponent(documentId)}/review`,
+      { method: 'PATCH', body: JSON.stringify(payload) },
+    ),
 
   getSellerApplications: () =>
     authenticatedFetch<SellerApplication[]>('/sellers/applications'),
