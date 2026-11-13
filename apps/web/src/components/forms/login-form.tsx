@@ -29,12 +29,13 @@ export function LoginForm() {
       });
 
       setSession(result);
+      const roles = result.user.roles ?? [];
       router.replace(
-        result.user.roles?.some(
-          (role) => role === 'SUPER_ADMIN' || role === 'ADMIN',
-        )
+        roles.some((role) => role === 'SUPER_ADMIN' || role === 'ADMIN')
           ? '/dashboard/admin'
-          : '/dashboard',
+          : roles.includes('SELLER')
+            ? '/dashboard/business/seller/dashboard'
+            : '/dashboard',
       );
     } catch (caught) {
       if (caught instanceof ApiError) {

@@ -308,7 +308,12 @@ describe('KycService', () => {
           provider_reference: 'external-reference',
           verified_at: verifiedAt,
         })],
-      });
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{ id: 'seller-role-id', code: 'SELLER' }],
+      })
+      .mockResolvedValueOnce({ rows: [] });
 
     const result = await service.recordVerificationResult('kyc-id', {
       communicationSucceeded: true,

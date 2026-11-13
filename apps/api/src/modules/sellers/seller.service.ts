@@ -22,6 +22,7 @@ interface SellerReviewRow {
   id: string;
   user_id: string;
   business_registration_status: string | null;
+  kyc_status: string;
   onboarding_status:
     | 'DRAFT'
     | 'SUBMITTED'
@@ -70,14 +71,18 @@ export class SellerService {
          FROM business_membership_programs program
          JOIN business_membership_entitlements entitlement
            ON entitlement.membership_program_id = program.id
+         JOIN payments payment
+           ON payment.id = entitlement.payment_id
+          AND payment.user_id = entitlement.user_id
+          AND payment.membership_program_id = entitlement.membership_program_id
          WHERE program.program_code = 'SELLER'
            AND program.enabled = true
            AND entitlement.user_id = $1
            AND entitlement.status = 'ACTIVE'
-           AND (
-             entitlement.expires_at IS NULL
-             OR entitlement.expires_at > now()
-           )
+           AND entitlement.starts_at <= now()
+           AND (entitlement.expires_at IS NULL OR entitlement.expires_at > now())
+           AND payment.purpose = 'BUSINESS_MEMBERSHIP'
+           AND payment.state = 'SUCCESSFUL'
            AND EXISTS (
              SELECT 1
              FROM business_membership_terms_acceptances acceptance
@@ -99,7 +104,6 @@ export class SellerService {
         userId,
         'SELLER',
       );
-      await this.grantMembershipRoles(client, userId, ['SELLER']);
       await this.audit.record(
         {
           actorId: userId,
@@ -278,18 +282,31 @@ export class SellerService {
   }
 
   async getSellerIdByUserId(userId: string): Promise<string> {
-    const result = await this.database.query<{ id: string }>(
-      `SELECT id
+    const result = await this.database.query<{
+      id: string;
+      onboarding_status: string;
+      kyc_status: string;
+    }>(
+      `SELECT id, onboarding_status, kyc_status
        FROM marketplace_sellers
        WHERE user_id = $1`,
       [userId],
     );
 
-    if (result.rowCount === 0) {
+    const seller = result.rows[0];
+    if (!seller) {
       throw new NotFoundException('Seller application not found');
     }
+    if (
+      seller.onboarding_status !== 'APPROVED' ||
+      seller.kyc_status !== 'VERIFIED'
+    ) {
+      throw new ForbiddenException(
+        'Seller access requires an approved application and verified KYC',
+      );
+    }
 
-    return result.rows[0].id;
+    return seller.id;
   }
 
   async listApplications() {
@@ -361,16 +378,29 @@ export class SellerService {
     this.validatePrice(dto.priceMinor);
 
     return this.database.withTransaction(async (client) => {
-      const sellerResult = await client.query<{ id: string }>(
-        `SELECT id
+      const sellerResult = await client.query<{
+        id: string;
+        onboarding_status: string;
+        kyc_status: string;
+      }>(
+        `SELECT id, onboarding_status, kyc_status
          FROM marketplace_sellers
-         WHERE user_id = $1`,
+         WHERE user_id = $1
+         FOR UPDATE`,
         [userId],
       );
       const seller = sellerResult.rows[0];
 
       if (!seller) {
         throw new NotFoundException('Seller application not found');
+      }
+      if (
+        seller.onboarding_status !== 'APPROVED' ||
+        seller.kyc_status !== 'VERIFIED'
+      ) {
+        throw new ForbiddenException(
+          'Seller access requires an approved application and verified KYC',
+        );
       }
 
       const categoryResult = await client.query<{ id: string }>(
@@ -440,6 +470,8 @@ export class SellerService {
        FROM marketplace_products product
        JOIN marketplace_sellers seller ON seller.id = product.seller_id
        WHERE seller.user_id = $1
+         AND seller.onboarding_status = 'APPROVED'
+         AND seller.kyc_status = 'VERIFIED'
        ORDER BY product.created_at DESC, product.id DESC`,
       [userId],
     );
@@ -454,7 +486,10 @@ export class SellerService {
               product.enabled, product.created_at, product.updated_at
        FROM marketplace_products product
        JOIN marketplace_sellers seller ON seller.id = product.seller_id
-       WHERE seller.user_id = $1 AND product.id = $2`,
+       WHERE seller.user_id = $1
+         AND seller.onboarding_status = 'APPROVED'
+         AND seller.kyc_status = 'VERIFIED'
+         AND product.id = $2`,
       [userId, productId],
     );
     const product = result.rows[0];
@@ -493,7 +528,10 @@ export class SellerService {
                 product.enabled, product.created_at, product.updated_at
          FROM marketplace_products product
          JOIN marketplace_sellers seller ON seller.id = product.seller_id
-         WHERE seller.user_id = $1 AND product.id = $2
+         WHERE seller.user_id = $1
+         AND seller.onboarding_status = 'APPROVED'
+         AND seller.kyc_status = 'VERIFIED'
+         AND product.id = $2
          FOR UPDATE OF product`,
         [userId, productId],
       );
@@ -743,7 +781,7 @@ export class SellerService {
   ): Promise<SellerReviewResult> {
     return this.database.withTransaction(async (client) => {
       const applicationResult = await client.query<SellerReviewRow>(
-        `SELECT id, user_id, onboarding_status, business_registration_status
+        `SELECT id, user_id, onboarding_status, business_registration_status, kyc_status
          FROM marketplace_sellers
          WHERE id = $1
          FOR UPDATE`,
@@ -811,6 +849,13 @@ export class SellerService {
         throw new ConflictException(
           'Seller application changed while it was being reviewed',
         );
+      }
+
+      if (
+        reviewedApplication.onboarding_status === 'APPROVED' &&
+        application.kyc_status === 'VERIFIED'
+      ) {
+        await this.grantMembershipRoles(client, application.user_id, ['SELLER']);
       }
 
       await client.query(

@@ -52,6 +52,24 @@ describe('SellerService membership eligibility', () => {
     audit.record.mockResolvedValue(undefined);
   });
 
+  it('requires a successful started SELLER membership payment and current terms', async () => {
+    database.query.mockResolvedValueOnce({
+      rows: [{ eligible: true }],
+      rowCount: 1,
+    });
+
+    await expect(
+      service.isSellerApplicationEligible('user-id'),
+    ).resolves.toBe(true);
+
+    const eligibilityQuery = database.query.mock.calls[0]?.[0] as string;
+    expect(eligibilityQuery).toContain('JOIN payments payment');
+    expect(eligibilityQuery).toContain("payment.purpose = 'BUSINESS_MEMBERSHIP'");
+    expect(eligibilityQuery).toContain("payment.state = 'SUCCESSFUL'");
+    expect(eligibilityQuery).toContain('entitlement.starts_at <= now()');
+    expect(eligibilityQuery).toContain('acceptance.terms_version = program.terms_version');
+  });
+
   const setEligibility = (eligible: boolean) => {
     database.query.mockResolvedValueOnce({
       rows: [{ eligible }],
@@ -59,7 +77,7 @@ describe('SellerService membership eligibility', () => {
     });
   };
 
-  it('grants Seller workspace access only after a successful paid Seller membership', async () => {
+  it('unlocks seller application eligibility without granting the SELLER role', async () => {
     transactionClient.query
       .mockResolvedValueOnce({ rows: [{ payment_id: 'seller-membership-payment' }], rowCount: 1 })
       .mockResolvedValueOnce({ rows: [{ id: 'seller-role-id', code: 'SELLER' }], rowCount: 1 })
@@ -69,8 +87,9 @@ describe('SellerService membership eligibility', () => {
       service.activateSellerMembership('user-id'),
     ).resolves.toEqual({ active: true, sellerType: 'SELLER' });
     expect(transactionClient.query.mock.calls[0]?.[0]).toContain("payment.state = 'SUCCESSFUL'");
-    expect(transactionClient.query.mock.calls[2]?.[0]).toContain(
-      'ON CONFLICT (user_id, role_id) DO NOTHING',
+    expect(transactionClient.query).toHaveBeenCalledTimes(1);
+    expect(transactionClient.query.mock.calls[0]?.[0]).toContain(
+      "payment.state = 'SUCCESSFUL'",
     );
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'SELLER_MEMBERSHIP_ACTIVATED' }),
@@ -831,7 +850,11 @@ describe('SellerService membership eligibility', () => {
   it('creates a seller location using the authenticated seller identity', async () => {
     database.query
       .mockResolvedValueOnce({
-        rows: [{ id: 'seller-id' }],
+        rows: [{
+          id: 'seller-id',
+          onboarding_status: 'APPROVED',
+          kyc_status: 'VERIFIED',
+        }],
         rowCount: 1,
       })
       .mockResolvedValueOnce({
@@ -905,7 +928,11 @@ describe('SellerService membership eligibility', () => {
   it('lists only enabled locations belonging to the authenticated seller', async () => {
     database.query
       .mockResolvedValueOnce({
-        rows: [{ id: 'seller-id' }],
+        rows: [{
+          id: 'seller-id',
+          onboarding_status: 'APPROVED',
+          kyc_status: 'VERIFIED',
+        }],
         rowCount: 1,
       })
       .mockResolvedValueOnce({
@@ -952,7 +979,11 @@ describe('SellerService membership eligibility', () => {
   it("retrieves order details and only the authenticated seller's items", async () => {
     database.query
       .mockResolvedValueOnce({
-        rows: [{ id: 'seller-id' }],
+        rows: [{
+          id: 'seller-id',
+          onboarding_status: 'APPROVED',
+          kyc_status: 'VERIFIED',
+        }],
         rowCount: 1,
       })
       .mockResolvedValueOnce({
@@ -1026,7 +1057,11 @@ describe('SellerService membership eligibility', () => {
   it('does not retrieve items when the order does not belong to the seller', async () => {
     database.query
       .mockResolvedValueOnce({
-        rows: [{ id: 'seller-id' }],
+        rows: [{
+          id: 'seller-id',
+          onboarding_status: 'APPROVED',
+          kyc_status: 'VERIFIED',
+        }],
         rowCount: 1,
       })
       .mockResolvedValueOnce({
@@ -1048,7 +1083,11 @@ describe('SellerService membership eligibility', () => {
   it('lists orders containing the authenticated seller items', async () => {
     database.query
       .mockResolvedValueOnce({
-        rows: [{ id: 'seller-id' }],
+        rows: [{
+          id: 'seller-id',
+          onboarding_status: 'APPROVED',
+          kyc_status: 'VERIFIED',
+        }],
         rowCount: 1,
       })
       .mockResolvedValueOnce({

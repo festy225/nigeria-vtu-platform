@@ -66,18 +66,6 @@ const customerLinks: NavigationLink[] = [
   { label: 'Settings', href: '/dashboard/settings', marker: 'S' },
   { label: 'My Referrals', href: '/dashboard/referrals', marker: 'R' },
   { label: 'Support', href: '/dashboard/support', marker: '?' },
-  {
-    label: 'Seller Dashboard',
-    href: '/dashboard/business/seller/dashboard',
-    marker: 'B',
-    roles: ['SELLER', 'WHOLESALER', 'DISTRIBUTOR', 'VENDOR'],
-  },
-  {
-    label: 'Seller orders',
-    href: '/dashboard/business/seller/orders',
-    marker: 'O',
-    roles: ['SELLER', 'WHOLESALER', 'DISTRIBUTOR', 'VENDOR'],
-  },
 ];
 
 const adminLinks: NavigationLink[] = [

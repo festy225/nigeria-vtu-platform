@@ -416,6 +416,27 @@ export class KycService {
         [sellerKycStatus, current.seller_id],
       );
 
+  if (sellerKycStatus === 'VERIFIED') {
+    const roles = await client.query<{ id: string; code: string }>(
+      `SELECT id, code::text AS code
+       FROM roles
+       WHERE code::text = ANY($1::text[])`,
+      [['SELLER']],
+    );
+
+    if (!roles.rows.some((role) => role.code === 'SELLER')) {
+      throw new ConflictException('SELLER role is not configured');
+    }
+
+    await client.query(
+      `INSERT INTO user_roles (user_id, role_id)
+       SELECT $1, role.role_id
+       FROM unnest($2::uuid[]) AS role(role_id)
+       ON CONFLICT (user_id, role_id) DO NOTHING`,
+      [current.user_id, roles.rows.map((role) => role.id)],
+    );
+  }
+
       if (
         current.status !== record.status ||
         (providerReference !== undefined &&
