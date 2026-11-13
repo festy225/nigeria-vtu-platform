@@ -21,6 +21,7 @@ import type { ReviewMarketplaceProductDto } from './dto/review-marketplace-produ
 interface SellerReviewRow {
   id: string;
   user_id: string;
+  business_registration_status: string | null;
   onboarding_status:
     | 'DRAFT'
     | 'SUBMITTED'
@@ -154,7 +155,7 @@ export class SellerService {
       }
 
       if (target === 'WHOLESALER') {
-        if (!['RETAILER', 'VENDOR', 'WHOLESALER', 'DISTRIBUTOR'].includes(seller.seller_type)) {
+        if (!['RETAILER', 'WHOLESALER', 'DISTRIBUTOR'].includes(seller.seller_type)) {
           throw new ForbiddenException('A valid seller account is required for a Wholesaler upgrade');
         }
         await this.requireVerifiedMembership(client, userId, 'SELLER');
@@ -313,6 +314,40 @@ export class SellerService {
 
     return result.rows;
   }
+
+
+  async getApplicationById(applicationId: string) {
+    const result = await this.database.query(
+      `SELECT
+        id, user_id, seller_type, business_name, store_name, store_slug,
+        business_description, business_registration_status,
+        cac_registration_number, business_email, business_phone,
+        business_address, products_services_description, product_categories,
+        onboarding_status, kyc_status, risk_status, reviewed_by,
+        reviewed_at, created_at, updated_at
+       FROM marketplace_sellers
+       WHERE id = $1`,
+      [applicationId],
+    );
+
+    if (!result.rowCount) {
+      throw new NotFoundException('Seller application not found');
+    }
+
+    const documents = await this.database.query(
+      `SELECT
+        id, seller_id, document_type, original_filename, mime_type,
+        size_bytes, verification_status, reviewer_note, reviewed_at,
+        uploaded_at
+       FROM seller_application_documents
+       WHERE seller_id = $1
+       ORDER BY uploaded_at DESC`,
+      [applicationId],
+    );
+
+    return { ...result.rows[0], documents: documents.rows };
+  }
+
 
   async createProduct(
     userId: string,
@@ -708,7 +743,7 @@ export class SellerService {
   ): Promise<SellerReviewResult> {
     return this.database.withTransaction(async (client) => {
       const applicationResult = await client.query<SellerReviewRow>(
-        `SELECT id, user_id, onboarding_status
+        `SELECT id, user_id, onboarding_status, business_registration_status
          FROM marketplace_sellers
          WHERE id = $1
          FOR UPDATE`,
@@ -724,6 +759,31 @@ export class SellerService {
         application.onboarding_status,
         dto.decision,
       );
+      if (dto.decision === 'APPROVE') {
+        const documentResult = await client.query<{ document_type: string }>(
+          `SELECT document_type
+           FROM seller_application_documents
+           WHERE seller_id = $1
+             AND verification_status = 'ACCEPTED'`,
+          [applicationId],
+        );
+        const acceptedTypes = new Set(
+          documentResult.rows.map((row) => row.document_type),
+        );
+        const requiredTypes = ["IDENTITY_DOCUMENT", "ADDRESS_PROOF"];
+        if (application.business_registration_status === 'REGISTERED') {
+          requiredTypes.push("CAC_CERTIFICATE");
+        }
+        const missingTypes = requiredTypes.filter(
+          (type) => !acceptedTypes.has(type),
+        );
+        if (missingTypes.length) {
+          throw new ConflictException(
+            `Cannot approve seller application until required documents are accepted: ${missingTypes.join(", ")}`,
+          );
+        }
+      }
+
       const updateResult = await client.query<SellerReviewResult>(
         `UPDATE marketplace_sellers
          SET onboarding_status = $1,
@@ -752,6 +812,22 @@ export class SellerService {
           'Seller application changed while it was being reviewed',
         );
       }
+
+      await client.query(
+        `INSERT INTO seller_application_reviews (
+           seller_id,
+           reviewer_id,
+           decision,
+           review_note
+         )
+         VALUES ($1, $2, $3, $4)`,
+        [
+          applicationId,
+          reviewerId,
+          dto.decision,
+          dto.reviewNote?.trim() || null,
+        ],
+      );
 
       await this.audit.record(
         {
@@ -786,9 +862,7 @@ export class SellerService {
     }
 
     const existing = await this.database.query(
-      `SELECT id
-       FROM marketplace_sellers
-       WHERE user_id = $1`,
+      `SELECT id FROM marketplace_sellers WHERE user_id = $1`,
       [userId],
     );
 
@@ -799,94 +873,252 @@ export class SellerService {
     }
 
     const storeSlug =
-      dto.storeSlug?.trim().toLowerCase() ??
-      this.buildSlug(dto.storeName);
+      dto.storeSlug?.trim().toLowerCase() ||
+      (dto.storeName?.trim() ? this.buildSlug(dto.storeName) : null);
 
-    const duplicateSlug = await this.database.query(
-      `SELECT id
-       FROM marketplace_sellers
-       WHERE store_slug = $1`,
-      [storeSlug],
-    );
-
-    if (duplicateSlug.rowCount) {
-      throw new ConflictException(
-        'That store slug is already in use',
+    if (storeSlug) {
+      const existingSlug = await this.database.query(
+        `SELECT id FROM marketplace_sellers WHERE store_slug = $1`,
+        [storeSlug],
       );
+      if (existingSlug.rowCount) {
+        throw new ConflictException('That store slug is already in use');
+      }
     }
 
     try {
       const result = await this.database.query(
         `INSERT INTO marketplace_sellers (
-          user_id,
-          seller_type,
-          business_name,
-          store_name,
-          store_slug,
-          onboarding_status,
-          kyc_status,
-          risk_status
+          user_id, seller_type, business_name, store_name, store_slug,
+          business_description, business_registration_status,
+          cac_registration_number, business_email, business_phone,
+          business_address, products_services_description, product_categories,
+          onboarding_status, kyc_status, risk_status
         )
-        VALUES ($1, $2, $3, $4, $5, 'SUBMITTED', 'PENDING', 'NORMAL')
-        RETURNING
-          id,
-          user_id,
-          seller_type,
-          business_name,
-          store_name,
-          store_slug,
-          onboarding_status,
-          kyc_status,
-          risk_status,
-          reviewed_by,
-          reviewed_at,
-          created_at,
-          updated_at`,
+        VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+          'DRAFT', 'PENDING', 'NORMAL'
+        )
+        RETURNING *`,
         [
           userId,
-          dto.sellerType,
-          dto.businessName.trim(),
-          dto.storeName.trim(),
+          dto.sellerType ?? 'RETAILER',
+          dto.businessName?.trim() || null,
+          dto.storeName?.trim() || null,
           storeSlug,
+          dto.businessDescription?.trim() || null,
+          dto.businessRegistrationStatus ?? null,
+          dto.cacRegistrationNumber?.trim() || null,
+          dto.businessEmail?.trim() || null,
+          dto.businessPhone?.trim() || null,
+          dto.businessAddress?.trim() || null,
+          dto.productsServicesDescription?.trim() || null,
+          dto.productCategories?.map((category) => category.trim()) ?? null,
         ],
       );
 
       return result.rows[0];
     } catch (error) {
-      const isUniqueViolation =
+      if (
         typeof error === 'object' &&
         error !== null &&
         'code' in error &&
-        (error as { code?: unknown }).code === '23505';
+        (error as { code?: unknown }).code === '23505'
+      ) {
+        const existingUser = await this.database.query(
+          `SELECT id FROM marketplace_sellers WHERE user_id = $1`,
+          [userId],
+        );
+        if (existingUser.rowCount) {
+          throw new ConflictException(
+            'A marketplace seller application already exists for this account',
+          );
+        }
 
-      if (!isUniqueViolation) {
-        throw error;
+        if (storeSlug) {
+          const existingSlug = await this.database.query(
+            `SELECT id FROM marketplace_sellers WHERE store_slug = $1`,
+            [storeSlug],
+          );
+          if (existingSlug.rowCount) {
+            throw new ConflictException('That store slug is already in use');
+          }
+        }
+
+        throw new ConflictException('A seller application could not be created');
       }
+      throw error;
+    }
+  }
 
-      const existingApplication = await this.database.query(
-        `SELECT id FROM marketplace_sellers WHERE user_id = $1`,
+  async updateApplication(
+    userId: string,
+    dto: CreateSellerApplicationDto,
+  ) {
+    const storeSlug =
+      dto.storeSlug?.trim().toLowerCase() ||
+      (dto.storeName?.trim() ? this.buildSlug(dto.storeName) : null);
+
+    try {
+      const result = await this.database.query(
+        `UPDATE marketplace_sellers
+         SET seller_type = COALESCE($2, seller_type),
+             business_name = COALESCE($3, business_name),
+             store_name = COALESCE($4, store_name),
+             store_slug = COALESCE($5, store_slug),
+             business_description = COALESCE($6, business_description),
+             business_registration_status = COALESCE($7, business_registration_status),
+             cac_registration_number = CASE
+               WHEN $7 = 'UNREGISTERED' THEN NULL
+               ELSE COALESCE($8, cac_registration_number)
+             END,
+             business_email = COALESCE($9, business_email),
+             business_phone = COALESCE($10, business_phone),
+             business_address = COALESCE($11, business_address),
+             products_services_description = COALESCE($12, products_services_description),
+             product_categories = COALESCE($13, product_categories),
+             updated_at = now()
+         WHERE user_id = $1
+           AND onboarding_status IN ('DRAFT', 'MORE_INFORMATION_REQUIRED')
+         RETURNING *`,
+        [
+          userId,
+          dto.sellerType ?? null,
+          dto.businessName?.trim() || null,
+          dto.storeName?.trim() || null,
+          storeSlug,
+          dto.businessDescription?.trim() || null,
+          dto.businessRegistrationStatus ?? null,
+          dto.cacRegistrationNumber?.trim() || null,
+          dto.businessEmail?.trim() || null,
+          dto.businessPhone?.trim() || null,
+          dto.businessAddress?.trim() || null,
+          dto.productsServicesDescription?.trim() || null,
+          dto.productCategories?.map((category) => category.trim()) ?? null,
+        ],
+      );
+
+      if (result.rowCount) return result.rows[0];
+
+      const existing = await this.database.query<{ onboarding_status: string }>(
+        `SELECT onboarding_status FROM marketplace_sellers WHERE user_id = $1`,
         [userId],
       );
 
-      if (existingApplication.rowCount) {
-        throw new ConflictException(
-          'A marketplace seller application already exists for this account',
-        );
+      if (!existing.rowCount) {
+        throw new NotFoundException('Seller application not found');
       }
 
-      const existingSlug = await this.database.query(
-        `SELECT id FROM marketplace_sellers WHERE store_slug = $1`,
-        [storeSlug],
+      throw new ConflictException(
+        `A seller application in ${existing.rows[0].onboarding_status} status cannot be edited`,
       );
-
-      if (existingSlug.rowCount) {
-        throw new ConflictException(
-          'That store slug is already in use',
-        );
+    } catch (error) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        (error as { code?: unknown }).code === '23505'
+      ) {
+        throw new ConflictException('That store slug is already in use');
       }
-
       throw error;
     }
+  }
+
+  async submitApplication(userId: string) {
+    return this.database.withTransaction(async (client) => {
+      const sellerResult = await client.query<{
+        id: string;
+        onboarding_status: string;
+        business_registration_status: string;
+      }>(
+        `SELECT id, onboarding_status, business_registration_status
+         FROM marketplace_sellers
+         WHERE user_id = $1
+         FOR UPDATE`,
+        [userId],
+      );
+
+      const seller = sellerResult.rows[0];
+      if (!seller) {
+        throw new NotFoundException('Seller application not found');
+      }
+
+      if (!['DRAFT', 'MORE_INFORMATION_REQUIRED'].includes(seller.onboarding_status)) {
+        throw new ConflictException(
+          `Application cannot be submitted from ${seller.onboarding_status} status`,
+        );
+      }
+
+      const profile = await client.query<{
+        business_name: string | null;
+        store_name: string | null;
+        store_slug: string | null;
+        business_description: string | null;
+        cac_registration_number: string | null;
+        business_phone: string | null;
+        business_address: string | null;
+        products_services_description: string | null;
+        product_categories: string[] | null;
+      }>(
+        `SELECT business_name, store_name, store_slug, business_description,
+                cac_registration_number, business_phone, business_address,
+                products_services_description, product_categories
+         FROM marketplace_sellers WHERE id = $1`,
+        [seller.id],
+      );
+
+      const details = profile.rows[0];
+      const missingProfile = [
+        !details.business_name?.trim() && "Business name",
+        !details.store_name?.trim() && "Store name",
+        !details.store_slug?.trim() && "Store slug",
+        !details.business_description?.trim() && "Business description",
+        !details.business_phone?.trim() && "Business phone",
+        !details.business_address?.trim() && "Business address",
+        !details.products_services_description?.trim() && "Products and services description",
+        !details.product_categories?.length && "Product categories",
+        seller.business_registration_status === "REGISTERED" &&
+          !details.cac_registration_number?.trim() && "CAC registration number",
+      ].filter((field): field is string => Boolean(field));
+
+      if (missingProfile.length) {
+        throw new BadRequestException(
+          `Complete these fields before submission: ${missingProfile.join(", ")}`,
+        );
+      }
+
+      const documents = await client.query<{ document_type: string }>(
+        `SELECT document_type
+         FROM seller_application_documents
+         WHERE seller_id = $1`,
+        [seller.id],
+      );
+
+      const uploaded = new Set(documents.rows.map((row) => row.document_type));
+      const required = ['IDENTITY_DOCUMENT', 'ADDRESS_PROOF'];
+
+      if (seller.business_registration_status === 'REGISTERED') {
+        required.push('CAC_CERTIFICATE');
+      }
+
+      const missing = required.filter((type) => !uploaded.has(type));
+      if (missing.length) {
+        throw new BadRequestException(
+          `Upload the required documents before submission: ${missing.join(', ')}`,
+        );
+      }
+
+      const result = await client.query(
+        `UPDATE marketplace_sellers
+         SET onboarding_status = 'SUBMITTED', updated_at = now()
+         WHERE id = $1
+         RETURNING *`,
+        [seller.id],
+      );
+
+      return result.rows[0];
+    });
   }
 
   async getApplication(userId: string) {
@@ -898,6 +1130,14 @@ export class SellerService {
         business_name,
         store_name,
         store_slug,
+        business_description,
+        business_registration_status,
+        cac_registration_number,
+        business_email,
+        business_phone,
+        business_address,
+        products_services_description,
+        product_categories,
         onboarding_status,
         kyc_status,
         risk_status,
@@ -916,7 +1156,25 @@ export class SellerService {
       );
     }
 
-    return result.rows[0];
+    const documents = await this.database.query(
+      `SELECT
+        id,
+        seller_id,
+        document_type,
+        original_filename,
+        mime_type,
+        size_bytes,
+        verification_status,
+        reviewer_note,
+        reviewed_at,
+        uploaded_at
+       FROM seller_application_documents
+       WHERE seller_id = $1
+       ORDER BY uploaded_at DESC`,
+      [result.rows[0].id],
+    );
+
+    return { ...result.rows[0], documents: documents.rows };
   }
 
   private reviewStatus(

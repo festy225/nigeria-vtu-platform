@@ -3,6 +3,7 @@ import { FeatureGuard } from '../../common/features/feature.guard';
 import { AuditModule } from '../audit/audit.module';
 import { SellerController } from './seller.controller';
 import { SellerService } from './seller.service';
+import { SellerApplicationDocumentService } from './seller-application-document.service';
 import { MarketplaceCategoryController } from './marketplace-category.controller';
 import { MarketplaceCategoryService } from './marketplace-category.service';
 import { MarketplaceAttributeController } from './marketplace-attribute.controller';
@@ -36,6 +37,7 @@ import { MarketplaceProductMediaService } from './marketplace-product-media.serv
   ],
   providers: [
     SellerService,
+    SellerApplicationDocumentService,
     MarketplaceCategoryService,
     MarketplaceAttributeService,
     MarketplaceProductAttributeService,

@@ -27,14 +27,21 @@ const sellerTypes: {
     label: 'Retailer',
     description: 'Sell products directly to customers.',
   },
-  {
-    value: 'VENDOR',
-    label: 'Vendor',
-    description: 'Operate a business store and sell products through CHIMZO.',
-  },
 ];
 
-type FormField = 'sellerType' | 'businessName' | 'storeName' | 'storeSlug';
+type FormField =
+  | 'sellerType'
+  | 'businessName'
+  | 'storeName'
+  | 'storeSlug'
+  | 'businessDescription'
+  | 'businessRegistrationStatus'
+  | 'cacRegistrationNumber'
+  | 'businessEmail'
+  | 'businessPhone'
+  | 'businessAddress'
+  | 'productsServicesDescription'
+  | 'productCategories';
 type FieldErrors = Partial<Record<FormField, string>>;
 
 function getApiMessage(error: ApiError) {
@@ -95,9 +102,19 @@ function isMissingApplication(error: unknown) {
 function isExistingApplicationError(error: ApiError) {
   const message = getApiMessage(error).toLowerCase();
   return (
-    error.status === 409 ||
     message.includes('seller application already exists') ||
     message.includes('application already exists')
+  );
+}
+
+function isDuplicateStoreSlugError(error: ApiError) {
+  const message = getApiMessage(error).toLowerCase();
+  return (
+    error.status === 409 &&
+    message.includes('store slug') &&
+    (message.includes('already in use') ||
+      message.includes('already exists') ||
+      message.includes('already taken'))
   );
 }
 
@@ -113,6 +130,15 @@ export default function SellerApplicationPage() {
   const [businessName, setBusinessName] = useState('');
   const [storeName, setStoreName] = useState('');
   const [storeSlug, setStoreSlug] = useState('');
+  const [businessDescription, setBusinessDescription] = useState('');
+  const [businessRegistrationStatus, setBusinessRegistrationStatus] =
+    useState<'REGISTERED' | 'UNREGISTERED' | 'IN_PROGRESS'>('UNREGISTERED');
+  const [cacRegistrationNumber, setCacRegistrationNumber] = useState('');
+  const [businessEmail, setBusinessEmail] = useState('');
+  const [businessPhone, setBusinessPhone] = useState('');
+  const [businessAddress, setBusinessAddress] = useState('');
+  const [productsServicesDescription, setProductsServicesDescription] = useState('');
+  const [productCategories, setProductCategories] = useState('');
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [sellerMembershipVerified, setSellerMembershipVerified] = useState(false);
@@ -126,7 +152,25 @@ export default function SellerApplicationPage() {
 
       try {
         const result = await api.getSellerApplication();
-        if (active) setApplication(result);
+        if (active) {
+          setApplication(result);
+          setSellerType(result.seller_type === 'RETAILER' ? 'RETAILER' : '');
+          setBusinessName(result.business_name ?? '');
+          setStoreName(result.store_name ?? '');
+          setStoreSlug(result.store_slug ?? '');
+          setBusinessDescription(result.business_description ?? '');
+          setBusinessRegistrationStatus(
+            result.business_registration_status ?? 'UNREGISTERED',
+          );
+          setCacRegistrationNumber(result.cac_registration_number ?? '');
+          setBusinessEmail(result.business_email ?? '');
+          setBusinessPhone(result.business_phone ?? '');
+          setBusinessAddress(result.business_address ?? '');
+          setProductsServicesDescription(
+            result.products_services_description ?? '',
+          );
+          setProductCategories((result.product_categories ?? []).join(', '));
+        }
       } catch (caught) {
         if (!active) return;
 
@@ -168,32 +212,38 @@ export default function SellerApplicationPage() {
 
   function validateForm(): FieldErrors {
     const errors: FieldErrors = {};
-    const trimmedBusinessName = businessName.trim();
-    const trimmedStoreName = storeName.trim();
-    const trimmedStoreSlug = storeSlug.trim();
+    const required = (value: string, field: FormField, label: string, min: number, max: number) => {
+      const trimmed = value.trim();
+      if (!trimmed) errors[field] = `${label} is required.`;
+      else if (trimmed.length < min || trimmed.length > max) {
+        errors[field] = `${label} must be between ${min} and ${max} characters.`;
+      }
+    };
 
     if (!sellerType) errors.sellerType = 'Choose a business type.';
+    required(businessName, 'businessName', 'Business name', 2, 200);
+    required(storeName, 'storeName', 'Store name', 2, 200);
+    required(businessDescription, 'businessDescription', 'Business description', 20, 3000);
+    required(businessPhone, 'businessPhone', 'Business phone', 7, 40);
+    required(businessAddress, 'businessAddress', 'Business address', 10, 1000);
+    required(productsServicesDescription, 'productsServicesDescription', 'Products and services description', 20, 3000);
 
-    if (!trimmedBusinessName) {
-      errors.businessName = 'Business name is required.';
-    } else if (trimmedBusinessName.length < 2 || trimmedBusinessName.length > 200) {
-      errors.businessName = 'Business name must be between 2 and 200 characters.';
+    const slug = storeSlug.trim();
+    if (slug && (slug.length < 2 || slug.length > 220 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug))) {
+      errors.storeSlug = 'Use 2–220 lowercase letters or numbers, separated by single hyphens.';
     }
 
-    if (!trimmedStoreName) {
-      errors.storeName = 'Store name is required.';
-    } else if (trimmedStoreName.length < 2 || trimmedStoreName.length > 200) {
-      errors.storeName = 'Store name must be between 2 and 200 characters.';
+    if (businessEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(businessEmail.trim())) {
+      errors.businessEmail = 'Enter a valid business email address.';
     }
 
-    if (trimmedStoreSlug) {
-      if (trimmedStoreSlug.length < 2 || trimmedStoreSlug.length > 220) {
-        errors.storeSlug = 'Store slug must be between 2 and 220 characters.';
-      } else if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(trimmedStoreSlug)) {
-        errors.storeSlug =
-          'Use lowercase letters, numbers, and single hyphens between words.';
-      }
+    if (businessRegistrationStatus === 'REGISTERED' && !cacRegistrationNumber.trim()) {
+      errors.cacRegistrationNumber = 'CAC registration number is required for a registered business.';
     }
+
+    const categories = productCategories.split(',').map((item) => item.trim()).filter(Boolean);
+    if (!categories.length) errors.productCategories = 'Enter at least one product or service category.';
+    else if (categories.length > 30) errors.productCategories = 'Enter no more than 30 categories.';
 
     return errors;
   }
@@ -209,17 +259,53 @@ export default function SellerApplicationPage() {
     setSubmitting(true);
 
     try {
-      const result = await api.createSellerApplication({
+      const payload = {
         sellerType,
         businessName: businessName.trim(),
         storeName: storeName.trim(),
         ...(storeSlug.trim() ? { storeSlug: storeSlug.trim() } : {}),
-      });
+        businessDescription: businessDescription.trim(),
+        businessRegistrationStatus,
+        ...(cacRegistrationNumber.trim()
+          ? { cacRegistrationNumber: cacRegistrationNumber.trim() }
+          : {}),
+        ...(businessEmail.trim() ? { businessEmail: businessEmail.trim() } : {}),
+        businessPhone: businessPhone.trim(),
+        businessAddress: businessAddress.trim(),
+        productsServicesDescription: productsServicesDescription.trim(),
+        productCategories: productCategories
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean),
+      };
+
+      const result = application
+        ? await api.updateSellerApplication(payload)
+        : await api.createSellerApplication(payload);
 
       setApplication(result);
-      setSubmittedSuccessfully(true);
+      setSubmittedSuccessfully(false);
+
+      // Application creation has succeeded. A session refresh failure
+      // must not make the user believe that submission failed.
+      try {
+        await refreshUser();
+      } catch {
+        // Keep the successful application state visible.
+      }
     } catch (caught) {
-      if (caught instanceof ApiError && isExistingApplicationError(caught)) {
+      if (
+        caught instanceof ApiError &&
+        isDuplicateStoreSlugError(caught)
+      ) {
+        setFieldErrors((current) => ({
+          ...current,
+          storeSlug: getApiMessage(caught),
+        }));
+      } else if (
+        caught instanceof ApiError &&
+        isExistingApplicationError(caught)
+      ) {
         try {
           const existing = await api.getSellerApplication();
           setApplication(existing);
@@ -245,7 +331,7 @@ export default function SellerApplicationPage() {
     }
   }
 
-  if (loading) return <LoadingState label="Loading your seller applicationâ€¦" />;
+  if (loading) return <LoadingState label="Loading your seller application..." />;
 
   if (pageError) {
     return (
@@ -262,7 +348,10 @@ export default function SellerApplicationPage() {
     );
   }
 
-  if (application) {
+  if (
+    application &&
+    !['DRAFT', 'MORE_INFORMATION_REQUIRED'].includes(application.onboarding_status)
+  ) {
     return (
       <div className="space-y-8">
         <header>
@@ -366,7 +455,7 @@ export default function SellerApplicationPage() {
     );
   }
 
-  if (!sellerMembershipVerified) {
+  if (!sellerMembershipVerified && !application) {
     return (
       <SellerMembershipGate
         onVerified={async () => {
@@ -573,6 +662,128 @@ export default function SellerApplicationPage() {
                   Preview: <span className="font-medium text-slate-700">{storeSlug.trim() || 'your-store-slug'}</span>
                 </p>
               </div>
+
+              <div>
+                <label htmlFor="businessDescription" className="mb-2 block text-sm font-medium text-slate-700">
+                  Business description
+                </label>
+                <textarea
+                  id="businessDescription"
+                  value={businessDescription}
+                  onChange={(e) => setBusinessDescription(e.target.value)}
+                  required
+                  minLength={20}
+                  maxLength={3000}
+                  rows={4}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900"
+                />
+                {fieldErrors.businessDescription && <p className="mt-2 text-sm text-rose-600">{fieldErrors.businessDescription}</p>}
+              </div>
+
+              <div>
+                <label htmlFor="businessRegistrationStatus" className="mb-2 block text-sm font-medium text-slate-700">
+                  Business registration status
+                </label>
+                <select
+                  id="businessRegistrationStatus"
+                  value={businessRegistrationStatus}
+                  onChange={(e) => setBusinessRegistrationStatus(e.target.value as typeof businessRegistrationStatus)}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900"
+                >
+                  <option value="UNREGISTERED">Not registered</option>
+                  <option value="REGISTERED">CAC registered</option>
+                  <option value="IN_PROGRESS">Registration in progress</option>
+                </select>
+              </div>
+
+              {businessRegistrationStatus === 'REGISTERED' && (
+                <div>
+                  <label htmlFor="cacRegistrationNumber" className="mb-2 block text-sm font-medium text-slate-700">
+                    CAC registration number
+                  </label>
+                  <input
+                    id="cacRegistrationNumber"
+                    value={cacRegistrationNumber}
+                    onChange={(e) => setCacRegistrationNumber(e.target.value)}
+                    required
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900"
+                  />
+                  {fieldErrors.cacRegistrationNumber && <p className="mt-2 text-sm text-rose-600">{fieldErrors.cacRegistrationNumber}</p>}
+                </div>
+              )}
+
+              <div>
+                <label htmlFor="businessEmail" className="mb-2 block text-sm font-medium text-slate-700">
+                  Business email (optional)
+                </label>
+                <input
+                  id="businessEmail"
+                  type="email"
+                  value={businessEmail}
+                  onChange={(e) => setBusinessEmail(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900"
+                />
+                {fieldErrors.businessEmail && <p className="mt-2 text-sm text-rose-600">{fieldErrors.businessEmail}</p>}
+              </div>
+
+              <div>
+                <label htmlFor="businessPhone" className="mb-2 block text-sm font-medium text-slate-700">
+                  Business phone
+                </label>
+                <input
+                  id="businessPhone"
+                  type="tel"
+                  value={businessPhone}
+                  onChange={(e) => setBusinessPhone(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900"
+                />
+                {fieldErrors.businessPhone && <p className="mt-2 text-sm text-rose-600">{fieldErrors.businessPhone}</p>}
+              </div>
+
+              <div>
+                <label htmlFor="businessAddress" className="mb-2 block text-sm font-medium text-slate-700">
+                  Business address
+                </label>
+                <textarea
+                  id="businessAddress"
+                  value={businessAddress}
+                  onChange={(e) => setBusinessAddress(e.target.value)}
+                  rows={3}
+                  maxLength={1000}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900"
+                />
+                {fieldErrors.businessAddress && <p className="mt-2 text-sm text-rose-600">{fieldErrors.businessAddress}</p>}
+              </div>
+
+              <div>
+                <label htmlFor="productsServicesDescription" className="mb-2 block text-sm font-medium text-slate-700">
+                  Products and services description
+                </label>
+                <textarea
+                  id="productsServicesDescription"
+                  value={productsServicesDescription}
+                  onChange={(e) => setProductsServicesDescription(e.target.value)}
+                  rows={4}
+                  maxLength={3000}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900"
+                />
+                {fieldErrors.productsServicesDescription && <p className="mt-2 text-sm text-rose-600">{fieldErrors.productsServicesDescription}</p>}
+              </div>
+
+              <div>
+                <label htmlFor="productCategories" className="mb-2 block text-sm font-medium text-slate-700">
+                  Product and service categories
+                </label>
+                <input
+                  id="productCategories"
+                  value={productCategories}
+                  onChange={(e) => setProductCategories(e.target.value)}
+                  placeholder="Electronics, clothing, groceries"
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900"
+                />
+                <p className="mt-1 text-xs text-slate-500">Separate categories with commas.</p>
+                {fieldErrors.productCategories && <p className="mt-2 text-sm text-rose-600">{fieldErrors.productCategories}</p>}
+              </div>
             </div>
           </Card>
         </fieldset>
@@ -587,7 +798,7 @@ export default function SellerApplicationPage() {
         )}
 
         <Button type="submit" className="w-full sm:w-auto" disabled={submitting}>
-          {submitting ? 'Submitting application...' : 'Submit seller application'}
+          {submitting ? 'Saving draft...' : 'Save Draft'}
         </Button>
       </form>
     </div>

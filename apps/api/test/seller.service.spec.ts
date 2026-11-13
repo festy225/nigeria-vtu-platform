@@ -31,6 +31,12 @@ describe('SellerService membership eligibility', () => {
     businessName: 'Example Business',
     storeName: 'Example Store',
     storeSlug: 'example-store',
+    businessDescription: 'A retail business selling everyday products.',
+    businessRegistrationStatus: 'UNREGISTERED' as const,
+    businessPhone: '+2348012345678',
+    businessAddress: '10 Market Road, Lagos, Nigeria',
+    productsServicesDescription: 'Retail sale of everyday consumer products.',
+    productCategories: ['Electronics'],
   };
 
   beforeEach(() => {
@@ -431,7 +437,7 @@ describe('SellerService membership eligibility', () => {
     );
   });
 
-  it('continues the existing application submission flow when eligible', async () => {
+  it('creates a draft application when eligible', async () => {
     setEligibility(true);
     database.query
       .mockResolvedValueOnce({ rows: [], rowCount: 0 })
@@ -440,7 +446,7 @@ describe('SellerService membership eligibility', () => {
         rows: [{
           id: 'seller-id',
           user_id: 'authenticated-user-id',
-          onboarding_status: 'SUBMITTED',
+          onboarding_status: 'DRAFT',
           kyc_status: 'PENDING',
         }],
         rowCount: 1,
@@ -448,19 +454,44 @@ describe('SellerService membership eligibility', () => {
 
     const result = await service.createApplication(
       'authenticated-user-id',
-      sellerApplication,
+      {
+        ...sellerApplication,
+        businessName: '  Example Business  ',
+        storeName: '  Example Store  ',
+        storeSlug: '  Example-Store  ',
+      },
     );
 
     expect(result).toMatchObject({
       id: 'seller-id',
       user_id: 'authenticated-user-id',
-      onboarding_status: 'SUBMITTED',
+      onboarding_status: 'DRAFT',
       kyc_status: 'PENDING',
     });
     expect(database.query).toHaveBeenCalledTimes(4);
+
     const insert = database.query.mock.calls[3]?.[0] ?? '';
     expect(insert).toContain('INSERT INTO marketplace_sellers');
+    const insertColumns = insert.match(
+      /INSERT INTO marketplace_sellers\s*\(([\s\S]*?)\)\s*VALUES/i,
+    )?.[1] ?? '';
+    expect(insertColumns.match(/\bstore_slug\b/g)).toHaveLength(1);
     expect(insert).not.toMatch(/roles|user_roles|business_membership_entitlements/i);
+    expect(database.query.mock.calls[3]?.[1]).toEqual([
+      'authenticated-user-id',
+      'RETAILER',
+      'Example Business',
+      'Example Store',
+      'example-store',
+      sellerApplication.businessDescription,
+      'UNREGISTERED',
+      null,
+      null,
+      sellerApplication.businessPhone,
+      sellerApplication.businessAddress,
+      sellerApplication.productsServicesDescription,
+      ['Electronics'],
+    ]);
   });
 
   it('returns ConflictException when another request creates the same user application', async () => {
@@ -504,20 +535,20 @@ describe('SellerService membership eligibility', () => {
       id: 'seller-id',
       user_id: 'authenticated-user-id',
       store_name: 'Example Store',
-      onboarding_status: 'SUBMITTED',
+      onboarding_status: 'DRAFT',
       kyc_status: 'PENDING',
     };
 
     database.query.mockResolvedValueOnce({
       rows: [application],
       rowCount: 1,
-    });
+    }).mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
     await expect(
       service.getApplication('authenticated-user-id'),
-    ).resolves.toEqual(application);
+    ).resolves.toEqual({ ...application, documents: [] });
 
-    expect(database.query).toHaveBeenCalledTimes(1);
+    expect(database.query).toHaveBeenCalledTimes(2);
     expect(database.query.mock.calls[0]?.[1]).toEqual([
       'authenticated-user-id',
     ]);
@@ -573,9 +604,18 @@ describe('SellerService membership eligibility', () => {
             id: 'application-id',
             user_id: 'applicant-id',
             onboarding_status: currentStatus,
+            business_registration_status: 'UNREGISTERED',
           }],
-        })
-        .mockResolvedValueOnce({
+        });
+      if (decision === 'APPROVE') {
+        transactionClient.query.mockResolvedValueOnce({
+          rows: [
+            { document_type: 'IDENTITY_DOCUMENT' },
+            { document_type: 'ADDRESS_PROOF' },
+          ],
+        });
+      }
+      transactionClient.query.mockResolvedValueOnce({
           rows: [{
             id: 'application-id',
             user_id: 'applicant-id',
@@ -583,7 +623,8 @@ describe('SellerService membership eligibility', () => {
             reviewed_by: 'super-admin-id',
             reviewed_at: reviewedAt,
           }],
-        });
+        })
+        .mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
       const result = await service.reviewApplication(
         'application-id',
@@ -597,7 +638,9 @@ describe('SellerService membership eligibility', () => {
         reviewed_by: 'super-admin-id',
         reviewed_at: reviewedAt,
       });
-      const update = transactionClient.query.mock.calls[1];
+      const update = transactionClient.query.mock.calls.find(([sql]) =>
+        String(sql).includes('UPDATE marketplace_sellers'),
+      );
       expect(update?.[0]).toContain('reviewed_by = $2');
       expect(update?.[0]).toContain('reviewed_at = now()');
       expect(update?.[0]).not.toMatch(/kyc_status|seller_type|role|entitlement/i);
@@ -607,6 +650,20 @@ describe('SellerService membership eligibility', () => {
         'application-id',
         currentStatus,
       ]);
+
+      const historyInsert = transactionClient.query.mock.calls.find(([sql]) =>
+        String(sql).includes('INSERT INTO seller_application_reviews'),
+      );
+      expect(historyInsert?.[0]).toContain(
+        'INSERT INTO seller_application_reviews',
+      );
+      expect(historyInsert?.[1]).toEqual([
+        'application-id',
+        'super-admin-id',
+        decision,
+        'Review note',
+      ]);
+
       expect(audit.record).toHaveBeenCalledWith(
         expect.objectContaining({
           actorId: 'super-admin-id',
@@ -625,6 +682,89 @@ describe('SellerService membership eligibility', () => {
       );
     },
   );
+
+  it.each([
+    {
+      registrationStatus: 'UNREGISTERED',
+      acceptedTypes: ['IDENTITY_DOCUMENT'],
+      missingType: 'ADDRESS_PROOF',
+    },
+    {
+      registrationStatus: 'UNREGISTERED',
+      acceptedTypes: ['ADDRESS_PROOF'],
+      missingType: 'IDENTITY_DOCUMENT',
+    },
+    {
+      registrationStatus: 'REGISTERED',
+      acceptedTypes: ['IDENTITY_DOCUMENT', 'ADDRESS_PROOF'],
+      missingType: 'CAC_CERTIFICATE',
+    },
+  ])(
+    'blocks approval when required document $missingType is not accepted',
+    async ({ registrationStatus, acceptedTypes, missingType }) => {
+      transactionClient.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: 'application-id',
+            user_id: 'applicant-id',
+            onboarding_status: 'SUBMITTED',
+            business_registration_status: registrationStatus,
+          }],
+        })
+        .mockResolvedValueOnce({
+          rows: acceptedTypes.map((document_type) => ({ document_type })),
+        });
+
+      await expect(
+        service.reviewApplication('application-id', 'super-admin-id', {
+          decision: 'APPROVE',
+        }),
+      ).rejects.toThrow(
+        `Cannot approve seller application until required documents are accepted: ${missingType}`,
+      );
+
+      expect(transactionClient.query).toHaveBeenCalledTimes(2);
+      expect(audit.record).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not audit or commit a review when history persistence fails', async () => {
+    transactionClient.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'application-id',
+          user_id: 'applicant-id',
+          onboarding_status: 'SUBMITTED',
+          business_registration_status: 'UNREGISTERED',
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          { document_type: 'IDENTITY_DOCUMENT' },
+          { document_type: 'ADDRESS_PROOF' },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'application-id',
+          user_id: 'applicant-id',
+          onboarding_status: 'APPROVED',
+          reviewed_by: 'super-admin-id',
+          reviewed_at: new Date('2026-10-03T11:00:00.000Z'),
+        }],
+      })
+      .mockRejectedValueOnce(new Error('Review history insert failed'));
+
+    await expect(
+      service.reviewApplication('application-id', 'super-admin-id', {
+        decision: 'APPROVE',
+        reviewNote: 'Approved',
+      }),
+    ).rejects.toThrow('Review history insert failed');
+
+    expect(transactionClient.query).toHaveBeenCalledTimes(4);
+    expect(audit.record).not.toHaveBeenCalled();
+  });
 
   it('does not review a nonexistent application', async () => {
     transactionClient.query.mockResolvedValueOnce({ rows: [] });
@@ -668,7 +808,14 @@ describe('SellerService membership eligibility', () => {
           id: 'application-id',
           user_id: 'applicant-id',
           onboarding_status: 'SUBMITTED',
+          business_registration_status: 'UNREGISTERED',
         }],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          { document_type: 'IDENTITY_DOCUMENT' },
+          { document_type: 'ADDRESS_PROOF' },
+        ],
       })
       .mockResolvedValueOnce({ rows: [] });
 
@@ -946,4 +1093,32 @@ describe('SellerService membership eligibility', () => {
     expect(listQuery).toContain('item.seller_id = $1');
     expect(database.query.mock.calls[1]?.[1]).toEqual(['seller-id']);
   });
+
+  it('retrieves an application and its document metadata by ID', async () => {
+    const application = { id: 'application-id', business_name: 'Example Business' };
+    const document = { id: 'document-id', document_type: 'IDENTITY_DOCUMENT' };
+
+    database.query
+      .mockResolvedValueOnce({ rows: [application], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [document], rowCount: 1 });
+
+    await expect(service.getApplicationById('application-id')).resolves.toEqual({
+      ...application,
+      documents: [document],
+    });
+
+    expect(database.query).toHaveBeenCalledTimes(2);
+    expect(database.query.mock.calls[0]?.[1]).toEqual(['application-id']);
+    expect(database.query.mock.calls[1]?.[1]).toEqual(['application-id']);
+    expect(database.query.mock.calls[1]?.[0]).not.toContain('storage_key');
+  });
+
+  it('returns not found for an unknown application ID', async () => {
+    await expect(
+      service.getApplicationById('missing-id'),
+    ).rejects.toThrow(NotFoundException);
+
+    expect(database.query).toHaveBeenCalledTimes(1);
+  });
+
 });

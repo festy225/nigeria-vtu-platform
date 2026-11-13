@@ -2,6 +2,11 @@ import {
   Body,
   Controller,
   Get,
+  Req,
+  UploadedFile,
+  UseInterceptors,
+  StreamableFile,
+  Res,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -9,6 +14,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Roles } from '../../common/auth/auth.decorators';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { Request, Response } from 'express';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { FeatureGuard } from '../../common/features/feature.guard';
 import { RequiresFeature } from '../../common/features/feature.decorator';
@@ -26,17 +33,92 @@ import {
 } from './seller.dtos';
 import { ReviewMarketplaceProductDto } from './dto/review-marketplace-product.dto';
 import { SellerService } from './seller.service';
+import { SellerApplicationDocumentService } from './seller-application-document.service';
 
 @Controller('sellers')
 @UseGuards(FeatureGuard)
 export class SellerController {
-  constructor(private readonly sellers: SellerService) {}
+  constructor(
+    private readonly sellers: SellerService,
+    private readonly documents: SellerApplicationDocumentService,
+  ) {}
+
+  @Get('application/documents')
+  @RequiresFeature('SELLER_STORES_ENABLED')
+  listApplicationDocuments(@CurrentUser() user: AuthenticatedUser) {
+    return this.documents.list(user.id);
+  }
+
+  @Post('application/documents')
+  @RequiresFeature('SELLER_STORES_ENABLED')
+  @UseInterceptors(FileInterceptor('file', {
+    limits: { fileSize: 10485760, files: 1 },
+  }))
+  uploadApplicationDocument(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body('documentType') documentType:
+      'IDENTITY_DOCUMENT' | 'CAC_CERTIFICATE' | 'BUSINESS_PROOF' | 'ADDRESS_PROOF',
+    @UploadedFile() file: Express.Multer.File,
+    @Req() request: Request,
+  ) {
+    return this.documents.upload(user.id, documentType, file, {
+      ipAddress: request.ip,
+      userAgent: request.get('user-agent') ?? undefined,
+    });
+  }
+
+  @Get('applications/:id/documents/:documentId/download')
+  @Roles('SUPER_ADMIN')
+  @RequiresFeature('SELLER_STORES_ENABLED')
+  async downloadApplicationDocument(
+    @Param('id', new ParseUUIDPipe()) applicationId: string,
+    @Param('documentId', new ParseUUIDPipe()) documentId: string,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result = await this.documents.download(applicationId, documentId);
+    response.setHeader('Content-Type', result.mimeType);
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename*=UTF-8''${encodeURIComponent(result.filename)}`,
+    );
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    response.setHeader('Cache-Control', 'private, no-store');
+    return new StreamableFile(result.bytes);
+  }
+
+  @Patch('applications/:id/documents/:documentId/review')
+  @Roles('SUPER_ADMIN')
+  @RequiresFeature('SELLER_STORES_ENABLED')
+  reviewApplicationDocument(
+    @Param('id', new ParseUUIDPipe()) applicationId: string,
+    @Param('documentId', new ParseUUIDPipe()) documentId: string,
+    @CurrentUser() reviewer: AuthenticatedUser,
+    @Body('decision') decision: 'ACCEPTED' | 'REJECTED',
+    @Body('note') note: string | undefined,
+    @Req() request: Request,
+  ) {
+    return this.documents.review(
+      applicationId, documentId, reviewer.id, decision, note, {
+        ipAddress: request.ip,
+        userAgent: request.get('user-agent') ?? undefined,
+      },
+    );
+  }
 
   @Get('applications')
   @Roles('SUPER_ADMIN')
   @RequiresFeature('SELLER_STORES_ENABLED')
   listApplications() {
     return this.sellers.listApplications();
+  }
+
+  @Get('applications/:id')
+  @Roles('SUPER_ADMIN')
+  @RequiresFeature('SELLER_STORES_ENABLED')
+  getApplicationById(
+    @Param('id', new ParseUUIDPipe()) applicationId: string,
+  ) {
+    return this.sellers.getApplicationById(applicationId);
   }
 
   @Patch('products/:id/moderation')
@@ -71,6 +153,21 @@ export class SellerController {
     @Body() dto: CreateSellerApplicationDto,
   ) {
     return this.sellers.createApplication(user.id, dto);
+  }
+
+  @Patch('application')
+  @RequiresFeature('SELLER_STORES_ENABLED')
+  updateApplication(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreateSellerApplicationDto,
+  ) {
+    return this.sellers.updateApplication(user.id, dto);
+  }
+
+  @Post('application/submit')
+  @RequiresFeature('SELLER_STORES_ENABLED')
+  submitApplication(@CurrentUser() user: AuthenticatedUser) {
+    return this.sellers.submitApplication(user.id);
   }
 
   @Get('application/eligibility')

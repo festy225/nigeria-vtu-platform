@@ -1,6 +1,7 @@
 ﻿'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { authenticatedFetch } from '@/lib/api';
 
 type Feature = {
   key: string;
@@ -104,24 +105,13 @@ export default function FeatureManagementPage() {
   const [updating, setUpdating] = useState<string | null>(null);
   const [error, setError] = useState('');
 
-  const apiUrl =
-    process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
 
   const loadFeatures = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
 
-      const response = await fetch(`${apiUrl}/features`, {
-        credentials: 'include',
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to load feature settings');
-      }
-
-      const result = await response.json();
-      const data = result?.data ?? result;
+      const data = await authenticatedFetch<Feature[]>('/features');
 
       if (Array.isArray(data)) {
         setFeatures(
@@ -140,30 +130,22 @@ export default function FeatureManagementPage() {
     } finally {
       setLoading(false);
     }
-  }, [apiUrl]);
+  }, []);
 
   async function toggleFeature(feature: Feature) {
     try {
       setUpdating(feature.key);
       setError('');
 
-      const response = await fetch(
-        `${apiUrl}/features/${encodeURIComponent(feature.key)}`,
+      await authenticatedFetch(
+        `/features/${encodeURIComponent(feature.key)}`,
         {
           method: 'PATCH',
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-          },
           body: JSON.stringify({
             enabled: !feature.enabled,
           }),
         },
       );
-
-      if (!response.ok) {
-        throw new Error('Failed to update feature');
-      }
 
       setFeatures((current) =>
         current.map((item) =>

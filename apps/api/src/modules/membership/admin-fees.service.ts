@@ -140,7 +140,7 @@ export class AdminFeesService {
         annual_price_minor AS "annualPriceMinor", currency,
         validity_duration AS "validityDuration", validity_unit AS "validityUnit",
         terms_and_conditions AS "termsAndConditions",
-        terms_version AS "termsVersion", updated_at AS "updatedAt",
+        terms_version AS "termsVersion", program.updated_at AS "updatedAt",
         updated_by_user_id AS "updatedByUserId",
         actor.email AS "updatedByEmail", actor.phone AS "updatedByPhone"
        FROM business_membership_programs program

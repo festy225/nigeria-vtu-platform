@@ -22,6 +22,12 @@ export class MarketplaceCatalogController {
     return this.catalog.listProducts();
   }
 
+  @Get('store/:slug')
+  @Public()
+  getStorefront(@Param('slug') slug: string) {
+    return this.catalog.getStorefront(slug);
+  }
+
   @Get(':id')
   @Public()
   getProduct(@Param('id', new ParseUUIDPipe()) productId: string) {

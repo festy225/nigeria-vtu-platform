@@ -36,6 +36,13 @@ const sections = [
     access: ["SUPER_ADMIN"],
   },
   {
+    title: "Testing & Simulation",
+    description: "Safely simulate seller membership payments and seller KYC outcomes in non-production environments.",
+    href: "/dashboard/admin/testing",
+    marker: "T",
+    access: ["SUPER_ADMIN"],
+  },
+  {
     title: "Fees & membership",
     description: "Configure membership prices and platform fee rules with audit history.",
     href: "/dashboard/admin/fees",

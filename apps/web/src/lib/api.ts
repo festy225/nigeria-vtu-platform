@@ -60,11 +60,44 @@ export interface WalletStatementRecord {
 
 export type SellerType =
   | 'RETAILER'
-  | 'VENDOR'
   | 'WHOLESALER'
   | 'DISTRIBUTOR';
 
-export type SellerApplicationType = Extract<SellerType, 'RETAILER' | 'VENDOR'>;
+export type SellerApplicationType = 'RETAILER';
+export type SellerBusinessRegistrationStatus = 'REGISTERED' | 'UNREGISTERED' | 'IN_PROGRESS';
+export type SellerApplicationDocumentType =
+  | 'IDENTITY_DOCUMENT'
+  | 'CAC_CERTIFICATE'
+  | 'BUSINESS_PROOF'
+  | 'ADDRESS_PROOF';
+
+export interface SellerApplicationPayload {
+  sellerType?: SellerApplicationType;
+  businessName?: string;
+  storeName?: string;
+  storeSlug?: string;
+  businessDescription?: string;
+  businessRegistrationStatus?: SellerBusinessRegistrationStatus;
+  cacRegistrationNumber?: string;
+  businessEmail?: string;
+  businessPhone?: string;
+  businessAddress?: string;
+  productsServicesDescription?: string;
+  productCategories?: string[];
+}
+
+export interface SellerApplicationDocument {
+  id: string;
+  seller_id: string;
+  document_type: SellerApplicationDocumentType;
+  original_filename: string;
+  mime_type: string;
+  size_bytes: number;
+  verification_status: 'PENDING' | 'ACCEPTED' | 'REJECTED';
+  reviewer_note: string | null;
+  reviewed_at: string | null;
+  uploaded_at: string;
+}
 
 export interface SellerApplication {
   id: string;
@@ -95,7 +128,30 @@ export interface SellerApplication {
   reviewed_at: string | null;
   created_at: string;
   updated_at: string;
+  business_description?: string | null;
+  business_registration_status?: SellerBusinessRegistrationStatus | null;
+  cac_registration_number?: string | null;
+  business_email?: string | null;
+  business_phone?: string | null;
+  business_address?: string | null;
+  products_services_description?: string | null;
+  product_categories?: string[];
+  documents?: SellerApplicationDocument[];
 }
+export type SellerApplicationReviewDecision =
+  | 'START_REVIEW'
+  | 'APPROVE'
+  | 'REJECT'
+  | 'MORE_INFORMATION_REQUIRED';
+
+export interface SellerApplicationReviewResult {
+  id: string;
+  user_id: string;
+  onboarding_status: SellerApplication['onboarding_status'];
+  reviewed_by: string;
+  reviewed_at: string;
+}
+
 export interface SellerMembershipProgram {
   id: string;
   programCode?: string;
@@ -112,6 +168,38 @@ export interface SellerMembershipProgram {
   terms_version?: string;
   termsAndConditions?: string | null;
   terms_and_conditions?: string | null;
+}
+
+export interface TestSimulatorStatus {
+  enabled: boolean;
+  production: boolean;
+}
+
+export interface AdminPendingSellerMembershipPayment {
+  id: string;
+  reference: string;
+  user_id: string;
+  amount_minor: number | string;
+  currency: string;
+  state: string;
+  provider_status: string | null;
+  created_at: string;
+  program_code: string;
+}
+
+export interface AdminKycVerification {
+  id: string;
+  seller_id: string;
+  user_id: string;
+  status: string;
+  provider_reference: string | null;
+  submitted_at: string | null;
+  verified_at: string | null;
+  created_at: string;
+  updated_at: string;
+  business_name: string;
+  onboarding_status: string;
+  kyc_status: string;
 }
 
 export interface SellerMembershipPaymentIntent {
@@ -659,22 +747,62 @@ passwordResetConfirm: (token: string, password: string) =>
       },
     ),
 
-  createSellerApplication: (payload: {
-    sellerType: SellerApplicationType;
-    businessName: string;
-    storeName: string;
-    storeSlug?: string;
-  }) =>
+  createSellerApplication: (payload: SellerApplicationPayload) =>
     authenticatedFetch<SellerApplication>('/sellers/application', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
 
+  updateSellerApplication: (payload: SellerApplicationPayload) =>
+    authenticatedFetch<SellerApplication>('/sellers/application', {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+
+  submitSellerApplication: () =>
+    authenticatedFetch<SellerApplication>('/sellers/application/submit', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+
   getSellerApplication: () =>
     authenticatedFetch<SellerApplication>('/sellers/application'),
 
+  getSellerApplicationDocuments: () =>
+    authenticatedFetch<SellerApplicationDocument[]>(
+      '/sellers/application/documents',
+    ),
+
+  uploadSellerApplicationDocument: (
+    documentType: SellerApplicationDocumentType,
+    file: File,
+  ) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('documentType', documentType);
+    return authenticatedFetch<SellerApplicationDocument>(
+      '/sellers/application/documents',
+      { method: 'POST', body: form },
+    );
+  },
+
   getSellerApplications: () =>
     authenticatedFetch<SellerApplication[]>('/sellers/applications'),
+
+  reviewSellerApplication: (
+    applicationId: string,
+    payload: {
+      decision: SellerApplicationReviewDecision;
+      reviewNote?: string;
+    },
+  ) =>
+    authenticatedFetch<SellerApplicationReviewResult>(
+      `/sellers/applications/${encodeURIComponent(applicationId)}/review`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      },
+    ),
 
   getSellerOrders: () =>
     authenticatedFetch<SellerOrder[]>('/sellers/orders'),
@@ -850,4 +978,41 @@ passwordResetConfirm: (token: string, password: string) =>
     authenticatedFetch<{ cleared: boolean }>('/marketplace/cart/items', {
       method: 'DELETE',
     }),
+  getTestPaymentSimulatorStatus: () =>
+    authenticatedFetch<TestSimulatorStatus>('/payments/admin/testing/status'),
+
+  getPendingSellerMembershipPayments: () =>
+    authenticatedFetch<AdminPendingSellerMembershipPayment[]>(
+      '/payments/admin/testing/pending-seller-memberships',
+    ),
+
+  simulateSellerMembershipPayment: (paymentId: string) =>
+    authenticatedFetch<{
+      status: string;
+      paymentReference: string;
+      simulated: boolean;
+      alreadyProcessed: boolean;
+    }>(`/payments/membership/${encodeURIComponent(paymentId)}/test-confirm`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+
+  getAdminKycSimulatorStatus: () =>
+    authenticatedFetch<TestSimulatorStatus>('/admin/testing/kyc/status'),
+
+  getAdminKycVerifications: () =>
+    authenticatedFetch<AdminKycVerification[]>('/admin/testing/kyc'),
+
+  simulateAdminKycVerification: (
+    verificationId: string,
+    status: 'VERIFIED' | 'REJECTED' | 'MORE_INFORMATION_REQUIRED',
+  ) =>
+    authenticatedFetch<unknown>(
+      `/admin/testing/kyc/${encodeURIComponent(verificationId)}/simulate`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ status }),
+      },
+    ),
+
 };

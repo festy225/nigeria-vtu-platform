@@ -62,6 +62,8 @@ const marketplaceCartService = {
   finalizePendingOrderCart: jest.fn(),
   releasePendingOrderCart: jest.fn(),
 };
+  const audit = { record: jest.fn() };
+
   const service = new PaymentService(
     db as never,
     providers as never,
@@ -70,6 +72,7 @@ const marketplaceCartService = {
     marketplaceOrderService as never,
     marketplaceCartService as never,
     providerSecretResolver as never,
+    audit as never,
   );
 
   const validRequest = {
@@ -827,6 +830,13 @@ const marketplaceCartService = {
       ).rejects.toThrow('membership requires');
 
       expect(client.query).toHaveBeenCalledTimes(2);
+
+      if (programCode === 'DISTRIBUTOR') {
+        expect(String(client.query.mock.calls[1]?.[0])).toContain(
+          "($2 = 'DISTRIBUTOR' AND seller.seller_type = 'WHOLESALER')",
+        );
+      }
+
       expect(provider.initializePayment).not.toHaveBeenCalled();
     },
   );
@@ -2125,4 +2135,91 @@ expect(provider.verifyWebhook).toHaveBeenCalledWith(
       String(query).includes('INSERT INTO business_membership_entitlements'),
     )).toBe(false);
   });
+
+  describe('Seller membership test simulator', () => {
+    const pendingPayment = {
+      payment_id: 'payment-id',
+      payment_reference: 'CHM-TEST-001',
+      payment_user_id: 'user-id',
+      payment_amount_minor: 100000,
+      payment_currency: 'NGN',
+      payment_state: 'PENDING',
+      payment_purpose: 'BUSINESS_MEMBERSHIP',
+      membership_program_id: 'seller-program-id',
+      provider_configuration_id: 'provider-config-id',
+      payment_provider_name: 'test-provider',
+      payment_provider_reference: null,
+      deposit_id: null,
+      marketplace_order_id: null,
+      provider_metadata: null,
+    };
+
+    it('rejects confirmation when the simulator is not enabled', async () => {
+      config.get.mockImplementation((key: string) =>
+        key === 'NODE_ENV' ? 'test' : undefined,
+      );
+
+      await expect(
+        service.simulateSellerMembershipPayment('payment-id', 'admin-id'),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(db.withTransaction).not.toHaveBeenCalled();
+    });
+
+    it('confirms a pending SELLER membership payment and grants entitlement', async () => {
+      config.get.mockImplementation((key: string) => {
+        if (key === 'NODE_ENV') return 'test';
+        if (key === 'ENABLE_TEST_PAYMENT_SIMULATOR') return 'true';
+        return undefined;
+      });
+
+      client.query
+        .mockResolvedValueOnce({ rows: [pendingPayment] })
+        .mockResolvedValueOnce({ rows: [{ program_code: 'SELLER' }] })
+        .mockResolvedValueOnce({ rows: [{ id: 'payment-id' }] })
+        .mockResolvedValueOnce({
+          rows: [{ validity_duration: 1, validity_unit: 'MONTH' }],
+        })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const result = await service.simulateSellerMembershipPayment(
+        'payment-id',
+        'admin-id',
+      );
+
+      expect(result).toEqual({
+        status: 'SUCCESSFUL',
+        paymentReference: 'CHM-TEST-001',
+        simulated: true,
+        alreadyProcessed: false,
+      });
+
+      const paymentUpdate = (client.query.mock.calls as QueryCall[]).find(
+        ([query]) => String(query).includes("SET state = 'SUCCESSFUL'"),
+      );
+      expect(paymentUpdate?.[1]).toEqual([
+        'test:CHM-TEST-001',
+        JSON.stringify({ source: 'TEST_SIMULATOR', simulated: true }),
+        'payment-id',
+      ]);
+
+      expect(
+        (client.query.mock.calls as QueryCall[]).some(([query]) =>
+          String(query).includes(
+            'INSERT INTO business_membership_entitlements',
+          ),
+        ),
+      ).toBe(true);
+
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorId: 'admin-id',
+          action: 'PAYMENT_TEST_SIMULATED',
+          resourceId: 'payment-id',
+        }),
+        client,
+      );
+    });
+  });
+
 });

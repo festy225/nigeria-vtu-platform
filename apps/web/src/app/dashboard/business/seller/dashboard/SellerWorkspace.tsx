@@ -51,6 +51,28 @@ export function SellerWorkspaceShell({ children }: { children: React.ReactNode }
     error: '',
   });
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const refreshWorkspace = async () => {
+    setRefreshing(true);
+    try {
+      const application = await api.getSellerApplication();
+      setWorkspace({ application, loading: false, error: '' });
+    } catch (error: unknown) {
+      setWorkspace((current) => ({
+        ...current,
+        loading: false,
+        error:
+          (error as { status?: number })?.status === 404
+            ? 'No seller application was found for this account.'
+            : error instanceof Error
+              ? error.message
+              : 'Unable to refresh your seller application.',
+      }));
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -145,6 +167,14 @@ export function SellerWorkspaceShell({ children }: { children: React.ReactNode }
                     <StatusBadge label="KYC verified" active={workspace.application?.kyc_status === 'VERIFIED'} />
                   </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={refreshWorkspace}
+                  disabled={refreshing}
+                  className="inline-flex items-center rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-[#08205B] disabled:opacity-50"
+                >
+                  {refreshing ? 'Refreshing...' : 'Refresh status'}
+                </button>
                 <button
                   type="button"
                   aria-expanded={mobileNavigationOpen}

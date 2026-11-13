@@ -88,6 +88,62 @@ export class MarketplaceCatalogService {
     return result.rows.map((row) => this.mapProduct(row));
   }
 
+  async getStorefront(slug: string) {
+    const sellerResult = await this.database.query<{
+      id: string;
+      business_name: string;
+      store_name: string;
+      store_slug: string;
+    }>(
+      `SELECT id, business_name, store_name, store_slug
+       FROM marketplace_sellers
+       WHERE store_slug = $1
+         AND onboarding_status = 'APPROVED'
+         AND kyc_status = 'VERIFIED'
+         AND risk_status IN ('NORMAL', 'WATCH')
+       LIMIT 1`,
+      [slug.trim().toLowerCase()],
+    );
+
+    const seller = sellerResult.rows[0];
+    if (!seller) {
+      throw new NotFoundException('Store not found');
+    }
+
+    const productsResult = await this.database.query<MarketplaceCatalogProductRow>(
+      `SELECT product.id, product.category_id, category.name AS category_name,
+              seller.store_name AS seller_name, product.name,
+              product.description, product.image_url,
+              product.price_minor::text AS price_minor, product.currency,
+              EXISTS (
+                SELECT 1
+                FROM marketplace_product_variants variant
+                WHERE variant.product_id = product.id
+                  AND variant.enabled = true
+              ) AS has_variants
+       FROM marketplace_products product
+       JOIN marketplace_product_categories category
+         ON category.id = product.category_id
+       JOIN marketplace_sellers seller ON seller.id = product.seller_id
+       WHERE seller.id = $1
+         AND product.status = 'LIVE'
+         AND product.enabled = true
+         AND category.enabled = true
+       ORDER BY product.created_at DESC, product.id`,
+      [seller.id],
+    );
+
+    return {
+      store: {
+        id: seller.id,
+        businessName: seller.business_name,
+        name: seller.store_name,
+        slug: seller.store_slug,
+      },
+      products: productsResult.rows.map((row) => this.mapProduct(row)),
+    };
+  }
+
   async getProduct(productId: string) {
     const result = await this.database.query<MarketplaceCatalogProductRow>(
       `SELECT product.id, product.category_id, category.name AS category_name,

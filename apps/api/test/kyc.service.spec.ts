@@ -192,6 +192,20 @@ describe('KycService', () => {
       expect(String(client.query.mock.calls[1]?.[0])).toContain(
         'UPDATE kyc_verifications',
       );
+
+      const expectedSellerStatus =
+        nextStatus === 'MORE_INFORMATION_REQUIRED'
+          ? 'IN_REVIEW'
+          : nextStatus;
+
+      expect(String(client.query.mock.calls[2]?.[0])).toContain(
+        'UPDATE marketplace_sellers',
+      );
+      expect(client.query.mock.calls[2]?.[1]).toEqual([
+        expectedSellerStatus,
+        'seller-id',
+      ]);
+
       expect(audit.record).toHaveBeenCalledWith(
         expect.objectContaining({
           beforeData: { status: previousStatus },
@@ -205,6 +219,30 @@ describe('KycService', () => {
       );
     },
   );
+
+  it('does not audit a KYC result when seller KYC synchronization fails', async () => {
+    const syncError = new Error('Seller KYC synchronization failed');
+
+    client.query
+      .mockResolvedValueOnce({ rows: [pendingRecord()] })
+      .mockResolvedValueOnce({
+        rows: [pendingRecord({ status: 'IN_REVIEW' })],
+      })
+      .mockRejectedValueOnce(syncError);
+
+    await expect(
+      service.applyNormalizedResult('kyc-id', {
+        status: 'IN_REVIEW',
+        source: 'PROVIDER',
+      }),
+    ).rejects.toThrow('Seller KYC synchronization failed');
+
+    expect(client.query).toHaveBeenCalledTimes(3);
+    expect(String(client.query.mock.calls[2]?.[0])).toContain(
+      'UPDATE marketplace_sellers',
+    );
+    expect(audit.record).not.toHaveBeenCalled();
+  });
 
   it('rejects invalid transitions and does not audit them', async () => {
     client.query.mockResolvedValueOnce({

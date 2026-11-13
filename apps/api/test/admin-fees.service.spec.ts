@@ -137,6 +137,7 @@ describe('AdminFeesService', () => {
 
     await expect(service.listPrograms()).resolves.toEqual(programs);
     expect(db.query.mock.calls[0]?.[0]).toContain('FROM business_membership_programs program');
+    expect(db.query.mock.calls[0]?.[0]).toContain('program.updated_at AS "updatedAt"');
     expect(db.query.mock.calls[0]?.[0]).toContain('SELECT program.id AS id');
     expect(db.query.mock.calls[0]?.[0]).not.toContain('WHERE enabled');
   });

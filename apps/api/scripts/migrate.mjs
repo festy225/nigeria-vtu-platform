@@ -88,7 +88,8 @@ const migrations = [
   '0054_membership_configuration_metadata.sql',
   '0055_seller_distributor_role_codes.sql',
   '0056_seller_distributor_roles.sql',
-  '0057_distributor_membership_program.sql'
+  '0057_distributor_membership_program.sql',
+  '0058_seller_application_profile_and_documents.sql'
 ];
 
 const migrationsDirectory = resolve(repoRoot, 'database/migrations');

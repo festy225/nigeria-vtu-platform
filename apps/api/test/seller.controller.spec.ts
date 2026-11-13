@@ -6,7 +6,7 @@ import { validate } from 'class-validator';
 import { CreateSellerApplicationDto } from '../src/modules/sellers/seller.dtos';
 
 describe('Create seller application membership progression', () => {
-  it.each(['WHOLESALER', 'DISTRIBUTOR'])(
+  it.each(['WHOLESALER', 'DISTRIBUTOR', 'VENDOR'])(
     'rejects %s as a fresh seller application type',
     async (sellerType) => {
       const request = Object.assign(new CreateSellerApplicationDto(), {
@@ -21,13 +21,19 @@ describe('Create seller application membership progression', () => {
     },
   );
 
-  it.each(['RETAILER', 'VENDOR'])(
+  it.each(['RETAILER'])(
     'allows %s as a seller application type',
     async (sellerType) => {
       const request = Object.assign(new CreateSellerApplicationDto(), {
         sellerType,
         businessName: 'Example Business',
         storeName: 'Example Store',
+        businessDescription: 'A retail business serving local customers.',
+        businessRegistrationStatus: 'UNREGISTERED',
+        businessPhone: '+2348012345678',
+        businessAddress: '12 Example Street, Lagos, Nigeria',
+        productsServicesDescription: 'Retail sales of household and personal products.',
+        productCategories: ['Household', 'Personal Care'],
       });
 
       await expect(validate(request)).resolves.toHaveLength(0);
@@ -48,7 +54,7 @@ describe('Seller application eligibility endpoint', () => {
     const sellers = {
       isSellerApplicationEligible: jest.fn().mockResolvedValue(true),
     };
-    const controller = new SellerController(sellers as never);
+    const controller = new SellerController(sellers as never, {} as never);
     const user: AuthenticatedUser = {
       id: 'authenticated-user-id',
       email: null,
@@ -87,7 +93,7 @@ describe('Seller orders endpoint', () => {
       ]),
     };
 
-    const controller = new SellerController(sellers as never);
+    const controller = new SellerController(sellers as never, {} as never);
 
     const user: AuthenticatedUser = {
       id: 'authenticated-seller-user',

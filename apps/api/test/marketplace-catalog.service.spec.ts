@@ -111,4 +111,59 @@ describe('MarketplaceCatalogService', () => {
 
     await expect(service.listProducts()).rejects.toThrow(ConflictException);
   });
+
+
+  it('returns an approved seller storefront with only live enabled products', async () => {
+    database.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'seller-id',
+          business_name: 'Seller Business',
+          store_name: 'Seller Store',
+          store_slug: 'seller-store',
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [product] });
+
+    await expect(service.getStorefront(' SELLER-STORE ')).resolves.toEqual({
+      store: {
+        id: 'seller-id',
+        businessName: 'Seller Business',
+        name: 'Seller Store',
+        slug: 'seller-store',
+      },
+      products: [{
+        id: product.id,
+        categoryId: product.category_id,
+        categoryName: product.category_name,
+        sellerName: product.seller_name,
+        name: product.name,
+        description: product.description,
+        imageUrl: null,
+        hasVariants: false,
+        priceMinor: 1250,
+        currency: 'NGN',
+      }],
+    });
+
+    expect(database.query.mock.calls[0]?.[1]).toEqual(['seller-store']);
+    expect(database.query.mock.calls[0]?.[0]).toContain(
+      "onboarding_status = 'APPROVED'",
+    );
+    expect(database.query.mock.calls[1]?.[0]).toContain(
+      "product.status = 'LIVE'",
+    );
+    expect(database.query.mock.calls[1]?.[0]).toContain(
+      'product.enabled = true',
+    );
+  });
+
+  it('does not expose stores that are not approved and KYC verified', async () => {
+    database.query.mockResolvedValueOnce({ rows: [] });
+
+    await expect(service.getStorefront('unknown-store')).rejects.toThrow(
+      NotFoundException,
+    );
+    expect(database.query).toHaveBeenCalledTimes(1);
+  });
 });

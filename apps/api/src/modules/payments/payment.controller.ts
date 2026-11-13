@@ -11,7 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Request } from 'express';
-import { Public } from '../../common/auth/auth.decorators';
+import { Public, Roles } from '../../common/auth/auth.decorators';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { FeatureGuard } from '../../common/features/feature.guard';
 import { RequiresFeature } from '../../common/features/feature.decorator';
@@ -31,6 +31,31 @@ export class PaymentController {
     @Body() dto: FundWalletDto,
   ) {
     return this.payments.createFundingIntent(user.id, user.email, dto);
+  }
+
+
+  @Get('admin/testing/status')
+  @Roles('SUPER_ADMIN')
+  getTestPaymentSimulatorStatus() {
+    return this.payments.getTestPaymentSimulatorStatus();
+  }
+
+  @Get('admin/testing/pending-seller-memberships')
+  @Roles('SUPER_ADMIN')
+  listPendingSellerMembershipPayments() {
+    return this.payments.listPendingSellerMembershipPayments();
+  }
+
+  @Post('membership/:paymentId/test-confirm')
+  @Roles('SUPER_ADMIN')
+  simulateSellerMembershipPayment(
+    @CurrentUser() user: { id: string },
+    @Param('paymentId', ParseUUIDPipe) paymentId: string,
+  ) {
+    return this.payments.simulateSellerMembershipPayment(
+      paymentId,
+      user.id,
+    );
   }
 
   @Post('membership')

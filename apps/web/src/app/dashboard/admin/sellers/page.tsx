@@ -12,12 +12,12 @@ import {
   api,
   ApiError,
   type SellerApplication,
+  type SellerApplicationReviewDecision,
   type SellerType,
 } from '@/lib/api';
 
 const sellerTypes: { value: SellerType; label: string }[] = [
   { value: 'RETAILER', label: 'Retailer' },
-  { value: 'VENDOR', label: 'Vendor' },
   { value: 'WHOLESALER', label: 'Wholesaler' },
   { value: 'DISTRIBUTOR', label: 'Distributor' },
 ];
@@ -106,6 +106,9 @@ function SellerApplicationsContent() {
     SellerApplication['kyc_status'] | ''
   >('');
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
+  const [reviewErrors, setReviewErrors] = useState<Record<string, string>>({});
+  const [reviewingApplicationId, setReviewingApplicationId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -130,6 +133,41 @@ function SellerApplicationsContent() {
       active = false;
     };
   }, [loadAttempt]);
+
+  async function submitApplicationReview(
+    applicationId: string,
+    decision: SellerApplicationReviewDecision,
+  ) {
+    setReviewingApplicationId(applicationId);
+    setReviewErrors((current) => {
+      const next = { ...current };
+      delete next[applicationId];
+      return next;
+    });
+
+    try {
+      const result = await api.reviewSellerApplication(applicationId, {
+        decision,
+        reviewNote: reviewNotes[applicationId]?.trim() || undefined,
+      });
+
+      setApplications((current) =>
+        current.map((application) =>
+          application.id === applicationId
+            ? { ...application, ...result }
+            : application,
+        ),
+      );
+      setReviewNotes((current) => ({ ...current, [applicationId]: '' }));
+    } catch (caught) {
+      setReviewErrors((current) => ({
+        ...current,
+        [applicationId]: loadErrorMessage(caught),
+      }));
+    } finally {
+      setReviewingApplicationId(null);
+    }
+  }
 
   const filteredApplications = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -344,6 +382,73 @@ function SellerApplicationsContent() {
                         </dd>
                       </div>
                     </dl>
+
+                    {['SUBMITTED', 'UNDER_REVIEW', 'MORE_INFORMATION_REQUIRED'].includes(application.onboarding_status) && (
+                      <section className="mt-5 space-y-3 border-t border-slate-800 pt-4">
+                        <h3 className="text-sm font-semibold text-slate-900">
+                          Review application
+                        </h3>
+                        <div>
+                          <label htmlFor={`seller-review-note-${application.id}`} className="label">
+                            Review note (optional)
+                          </label>
+                          <textarea
+                            id={`seller-review-note-${application.id}`}
+                            className="input min-h-24"
+                            maxLength={2000}
+                            value={reviewNotes[application.id] ?? ''}
+                            disabled={reviewingApplicationId === application.id}
+                            onChange={(event) => setReviewNotes((current) => ({
+                              ...current,
+                              [application.id]: event.target.value,
+                            }))}
+                            placeholder="Add an explanation or instructions for the applicant..."
+                          />
+                        </div>
+
+                        {reviewErrors[application.id] && (
+                          <p className="text-sm text-red-600" role="alert">
+                            {reviewErrors[application.id]}
+                          </p>
+                        )}
+
+                        <div className="flex flex-wrap gap-2">
+                          {application.onboarding_status === 'SUBMITTED' && (
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              disabled={reviewingApplicationId !== null}
+                              onClick={() => void submitApplicationReview(application.id, 'START_REVIEW')}
+                            >
+                              Start review
+                            </Button>
+                          )}
+                          <Button
+                            type="button"
+                            disabled={reviewingApplicationId !== null}
+                            onClick={() => void submitApplicationReview(application.id, 'APPROVE')}
+                          >
+                            Approve
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            disabled={reviewingApplicationId !== null}
+                            onClick={() => void submitApplicationReview(application.id, 'MORE_INFORMATION_REQUIRED')}
+                          >
+                            Request more information
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            disabled={reviewingApplicationId !== null}
+                            onClick={() => void submitApplicationReview(application.id, 'REJECT')}
+                          >
+                            Reject
+                          </Button>
+                        </div>
+                      </section>
+                    )}
 
                     <details className="mt-4 border-t border-slate-800 pt-4">
                       <summary className="cursor-pointer text-sm font-medium text-brand-300 outline-none hover:text-brand-200 focus-visible:ring-2 focus-visible:ring-brand-400">

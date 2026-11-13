@@ -279,13 +279,61 @@ export class KycService {
     );
   }
 
+  getTestSimulatorStatus() {
+    const production = process.env.NODE_ENV === "production";
+    const enabled =
+      !production &&
+      process.env.ENABLE_TEST_KYC_SIMULATOR === "true";
+    return { enabled, production };
+  }
+
+  async listForAdminTesting() {
+    const result = await this.database.query(
+      `SELECT verification.id, verification.seller_id, verification.user_id,
+              verification.status, verification.provider_reference,
+              verification.submitted_at, verification.verified_at,
+              verification.created_at, verification.updated_at,
+              seller.business_name, seller.onboarding_status,
+              seller.kyc_status
+       FROM kyc_verifications verification
+       JOIN marketplace_sellers seller
+         ON seller.id = verification.seller_id
+       ORDER BY verification.updated_at DESC
+       LIMIT 200`,
+    );
+    return result.rows;
+  }
+
+  async simulateVerificationStatus(
+    verificationId: string,
+    status: "VERIFIED" | "REJECTED" | "MORE_INFORMATION_REQUIRED",
+    actorId: string,
+  ): Promise<KycVerificationRecord> {
+    const { enabled } = this.getTestSimulatorStatus();
+    if (!enabled) {
+      throw new ForbiddenException("The test KYC simulator is disabled.");
+    }
+    if (!["VERIFIED", "REJECTED", "MORE_INFORMATION_REQUIRED"].includes(status)) {
+      throw new BadRequestException("Unsupported test KYC outcome.");
+    }
+    return this.updateProviderState(
+      verificationId,
+      status,
+      undefined,
+      true,
+      "TEST_SIMULATOR",
+      "TEST_SIMULATOR",
+      actorId,
+    );
+  }
   private async updateProviderState(
     verificationId: string,
     status: KycVerificationStatus,
     providerReference: string | undefined,
     submitted: boolean,
-    source: 'PROVIDER' | 'SYSTEM' = 'PROVIDER',
+    source: 'PROVIDER' | 'SYSTEM' | 'TEST_SIMULATOR' = 'PROVIDER',
     reasonCode?: string,
+    actorId?: string,
   ): Promise<KycVerificationRecord> {
     return this.database.withTransaction(async (client) => {
       const current = await this.findRecordForUpdate(client, verificationId);
@@ -357,6 +405,17 @@ export class KycService {
       );
       const record = updatedResult.rows[0];
 
+      const sellerKycStatus =
+        status === 'MORE_INFORMATION_REQUIRED' ? 'IN_REVIEW' : status;
+
+      await client.query(
+        `UPDATE marketplace_sellers
+         SET kyc_status = $1,
+             updated_at = now()
+         WHERE id = $2`,
+        [sellerKycStatus, current.seller_id],
+      );
+
       if (
         current.status !== record.status ||
         (providerReference !== undefined &&
@@ -364,6 +423,7 @@ export class KycService {
       ) {
         await this.audit.record(
           {
+            ...(actorId ? { actorId } : {}),
             action: 'KYC_VERIFICATION_STATUS_CHANGED',
             resourceType: 'KYC_VERIFICATION',
             resourceId: record.id,

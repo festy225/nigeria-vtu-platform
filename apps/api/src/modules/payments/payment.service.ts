@@ -5,6 +5,7 @@ import type { PoolClient } from 'pg';
 import type { CurrencyCode } from '@nigeria-vtu-platform/shared';
 import { DatabaseService } from '../../infrastructure/database/database.service';
 import { PaymentProviderRouterService } from '../providers/routing/payment-provider-router.service';
+import { AuditService } from '../audit/audit.service';
 import { ProviderSecretResolver } from '../providers/security/provider-secret-resolver.service';
 import type {
   CreateMembershipPaymentDto,
@@ -137,6 +138,7 @@ export class PaymentService {
     private readonly marketplaceOrderService: MarketplaceOrderService,
     private readonly marketplaceCartService: MarketplaceCartService,
     private readonly providerSecretResolver: ProviderSecretResolver,
+    private readonly audit: AuditService,
   ) {}
 
   async createFundingIntent(userId: string, customerEmail: string | null, request: FundWalletDto) {
@@ -555,7 +557,7 @@ if (response.status !== 'PENDING') {
            AND seller.kyc_status = 'VERIFIED'
            AND (
              ($2 = 'WHOLESALER'
-               AND seller.seller_type IN ('RETAILER', 'VENDOR', 'WHOLESALER', 'DISTRIBUTOR'))
+               AND seller.seller_type IN ('RETAILER', 'WHOLESALER', 'DISTRIBUTOR'))
              OR ($2 = 'DISTRIBUTOR' AND seller.seller_type = 'WHOLESALER')
            )
            AND EXISTS (
@@ -953,6 +955,213 @@ if (response.status !== 'PENDING') {
       }
       throw new BadGatewayException('Payment provider initialization failed');
     }
+  }
+
+
+  getTestPaymentSimulatorStatus() {
+    const nodeEnv =
+      this.config.get<string>('NODE_ENV') ?? process.env.NODE_ENV;
+    const simulatorEnabled =
+      this.config.get<string>('ENABLE_TEST_PAYMENT_SIMULATOR') ??
+      process.env.ENABLE_TEST_PAYMENT_SIMULATOR;
+
+    const production = nodeEnv === 'production';
+    return {
+      enabled: !production && simulatorEnabled === 'true',
+      production,
+    };
+  }
+
+  async listPendingSellerMembershipPayments() {
+    const result = await this.db.query(
+      `SELECT p.id, p.reference, p.user_id, p.amount_minor,
+              p.currency, p.state, p.provider_status, p.created_at,
+              program.program_code
+       FROM payments p
+       INNER JOIN business_membership_programs program
+         ON program.id = p.membership_program_id
+       WHERE p.purpose = 'BUSINESS_MEMBERSHIP'
+         AND p.state = 'PENDING'
+         AND program.program_code = 'SELLER'
+         AND p.deposit_id IS NULL
+         AND p.marketplace_order_id IS NULL
+       ORDER BY p.created_at ASC
+       LIMIT 200`,
+    );
+
+    return result.rows;
+  }
+
+  async simulateSellerMembershipPayment(
+    paymentId: string,
+    actorId: string,
+  ): Promise<{
+    status: 'SUCCESSFUL';
+    paymentReference: string;
+    simulated: true;
+    alreadyProcessed: boolean;
+  }> {
+    const nodeEnv =
+      this.config.get<string>('NODE_ENV') ?? process.env.NODE_ENV;
+    const simulatorEnabled =
+      this.config.get<string>('ENABLE_TEST_PAYMENT_SIMULATOR') ??
+      process.env.ENABLE_TEST_PAYMENT_SIMULATOR;
+
+    if (nodeEnv === 'production' || simulatorEnabled !== 'true') {
+      throw new ForbiddenException(
+        'The test payment simulator is disabled.',
+      );
+    }
+
+    return this.db.withTransaction(async (client) => {
+      const result = await client.query<PaymentSettlementRow & {
+        provider_metadata: unknown;
+      }>(
+        `SELECT
+           id AS payment_id,
+           reference AS payment_reference,
+           user_id AS payment_user_id,
+           amount_minor AS payment_amount_minor,
+           currency AS payment_currency,
+           state AS payment_state,
+           purpose AS payment_purpose,
+           membership_program_id,
+           provider_configuration_id,
+           provider_name AS payment_provider_name,
+           provider_reference AS payment_provider_reference,
+           deposit_id,
+           marketplace_order_id,
+           provider_metadata
+         FROM payments
+         WHERE id = $1
+         FOR UPDATE`,
+        [paymentId],
+      );
+
+      const payment = result.rows[0];
+      if (!payment) {
+        throw new NotFoundException('Payment not found.');
+      }
+
+      if (
+        payment.payment_purpose !== 'BUSINESS_MEMBERSHIP' ||
+        !payment.membership_program_id ||
+        payment.marketplace_order_id ||
+        payment.deposit_id
+      ) {
+        throw new BadRequestException(
+          'Only seller membership payments can be simulated.',
+        );
+      }
+
+      const programResult = await client.query<{ program_code: string }>(
+        `SELECT program_code
+         FROM business_membership_programs
+         WHERE id = $1
+         FOR SHARE`,
+        [payment.membership_program_id],
+      );
+
+      if (programResult.rows[0]?.program_code !== 'SELLER') {
+        throw new BadRequestException(
+          'The payment is not for the SELLER membership program.',
+        );
+      }
+
+      let metadata: Record<string, unknown> = {};
+      if (typeof payment.provider_metadata === 'string') {
+        try {
+          metadata = JSON.parse(payment.provider_metadata);
+        } catch {
+          metadata = {};
+        }
+      } else if (
+        payment.provider_metadata &&
+        typeof payment.provider_metadata === 'object'
+      ) {
+        metadata = payment.provider_metadata as Record<string, unknown>;
+      }
+
+      if (payment.payment_state === 'SUCCESSFUL') {
+        if (
+          metadata.source !== 'TEST_SIMULATOR' ||
+          metadata.simulated !== true
+        ) {
+          throw new ConflictException(
+            'A real successful payment cannot be simulated or overwritten.',
+          );
+        }
+
+        await this.ensureMembershipEntitlement(client, payment);
+
+        return {
+          status: 'SUCCESSFUL',
+          paymentReference: payment.payment_reference,
+          simulated: true,
+          alreadyProcessed: true,
+        };
+      }
+
+      if (payment.payment_state !== 'PENDING') {
+        throw new ConflictException(
+          `Payment in ${payment.payment_state} state cannot be simulated.`,
+        );
+      }
+
+      const simulatedReference = `test:${payment.payment_reference}`;
+      const simulatedMetadata = {
+        source: 'TEST_SIMULATOR',
+        simulated: true,
+      };
+
+      const update = await client.query(
+        `UPDATE payments
+         SET state = 'SUCCESSFUL',
+             provider_reference = $1,
+             provider_status = 'SUCCESS',
+             provider_metadata = $2
+         WHERE id = $3
+           AND state = 'PENDING'
+         RETURNING id`,
+        [
+          simulatedReference,
+          JSON.stringify(simulatedMetadata),
+          payment.payment_id,
+        ],
+      );
+
+      if (!update.rows[0]) {
+        throw new ConflictException(
+          'Payment state changed before the test confirmation could be applied.',
+        );
+      }
+
+      await this.ensureMembershipEntitlement(client, payment);
+
+      await this.audit.record(
+        {
+          actorId,
+          action: 'PAYMENT_TEST_SIMULATED',
+          resourceType: 'PAYMENT',
+          resourceId: payment.payment_id,
+          beforeData: { state: 'PENDING' },
+          afterData: {
+            state: 'SUCCESSFUL',
+            paymentReference: payment.payment_reference,
+            programCode: 'SELLER',
+            source: 'TEST_SIMULATOR',
+          },
+        },
+        client,
+      );
+
+      return {
+        status: 'SUCCESSFUL',
+        paymentReference: payment.payment_reference,
+        simulated: true,
+        alreadyProcessed: false,
+      };
+    });
   }
 
   async completeFromWebhook(
